@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { CircleNotchIcon } from '@phosphor-icons/react/dist/ssr';
 import { Button } from '@/components/ui/button';
 
 function WelcomeImage() {
@@ -21,29 +23,83 @@ function WelcomeImage() {
 interface WelcomeViewProps {
   startButtonText: string;
   onStartCall: () => void;
+  userName: string;
+  onUserNameChange: (name: string) => void;
+  isStarting: boolean;
 }
 
 export const WelcomeView = ({
   startButtonText,
   onStartCall,
+  userName,
+  onUserNameChange,
+  isStarting,
   ref,
 }: React.ComponentProps<'div'> & WelcomeViewProps) => {
+  const [nameInput, setNameInput] = useState(userName);
+
+  const handleSubmitName = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const name = nameInput.trim();
+    if (name) {
+      onUserNameChange(name);
+    }
+  };
+
   return (
     <div ref={ref}>
-      <section className="bg-background flex flex-col items-center justify-center text-center">
+      <section className="bg-background flex flex-col items-center justify-center px-4 text-center">
         <WelcomeImage />
 
-        <p className="text-foreground max-w-prose pt-1 leading-6 font-medium">
-          Chat live with your voice AI agent
-        </p>
+        {!userName ? (
+          <form onSubmit={handleSubmitName} className="flex w-full max-w-xs flex-col items-center">
+            <label htmlFor="user-name" className="text-foreground pt-1 leading-6 font-medium">
+              Enter your name
+            </label>
+            <input
+              id="user-name"
+              type="text"
+              autoFocus
+              autoComplete="given-name"
+              maxLength={50}
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              placeholder="Your name"
+              className="border-input bg-background text-foreground placeholder:text-muted-foreground focus-visible:ring-ring mt-4 h-10 w-64 rounded-full border px-4 text-center text-sm outline-none focus-visible:ring-2"
+            />
+            <Button
+              type="submit"
+              size="lg"
+              disabled={!nameInput.trim()}
+              className="mt-4 w-64 rounded-full font-mono text-xs font-bold tracking-wider uppercase"
+            >
+              Submit
+            </Button>
+          </form>
+        ) : (
+          <>
+            <p className="text-foreground max-w-prose pt-1 leading-6 font-medium">
+              Hi {userName}, chat live with your voice AI assistant
+            </p>
 
-        <Button
-          size="lg"
-          onClick={onStartCall}
-          className="mt-6 w-64 rounded-full font-mono text-xs font-bold tracking-wider uppercase"
-        >
-          {startButtonText}
-        </Button>
+            <Button
+              size="lg"
+              onClick={onStartCall}
+              disabled={isStarting}
+              aria-busy={isStarting}
+              className="mt-6 w-64 rounded-full font-mono text-xs font-bold tracking-wider uppercase"
+            >
+              {isStarting ? (
+                <>
+                  <CircleNotchIcon weight="bold" className="size-4 animate-spin" />
+                  Loading avatar…
+                </>
+              ) : (
+                startButtonText
+              )}
+            </Button>
+          </>
+        )}
       </section>
 
       <div className="fixed bottom-5 left-0 flex w-full items-center justify-center">

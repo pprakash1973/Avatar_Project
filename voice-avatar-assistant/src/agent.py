@@ -38,8 +38,21 @@ _anthropic_llm._NO_PREFILL_PATTERNS = (
 load_dotenv(".env.local")
 
 
+def build_greeting(user_name: str) -> str:
+    hello = f"Hi {user_name}!" if user_name else "Hi!"
+    return (
+        f"{hello} I am your personal assistant, I can search the web for you "
+        "and give results. What would you like me to do?"
+    )
+
+
 class Assistant(Agent):
-    def __init__(self) -> None:
+    def __init__(self, user_name: str = "") -> None:
+        user_context = (
+            f"\n# User\n\nThe user's name is {user_name}. Address them by name occasionally.\n"
+            if user_name
+            else ""
+        )
         super().__init__(
             # No temperature: Sonnet 5.5 rejects non-default sampling values.
             # parallel_tool_calls=False avoids duplicate web_search calls.
@@ -70,7 +83,8 @@ class Assistant(Agent):
                 - For medical, legal, or financial topics, provide general information only and suggest consulting a qualified professional.
                 - Protect privacy and minimize sensitive data.
                 """
-            ),
+            )
+            + user_context,
         )
 
     @function_tool()
@@ -117,7 +131,13 @@ async def entrypoint(ctx: JobContext) -> None:
     )
     await avatar.start(session, room=ctx.room)
 
-    await session.start(agent=Assistant(), room=ctx.room)
+    # The frontend sends the name typed on the welcome screen as the participant
+    # name. The avatar joins as an "agent" participant, so it is never matched here.
+    participant = await ctx.wait_for_participant()
+    user_name = participant.name.strip()
+
+    await session.start(agent=Assistant(user_name=user_name), room=ctx.room)
+    session.say(build_greeting(user_name))
 
 
 if __name__ == "__main__":

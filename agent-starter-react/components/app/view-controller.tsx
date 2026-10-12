@@ -1,8 +1,9 @@
 'use client';
 
 import { useTheme } from 'next-themes';
+import { ConnectionState } from 'livekit-client';
 import { AnimatePresence, motion } from 'motion/react';
-import { useAgent, useSessionContext } from '@livekit/components-react';
+import { useAgent, useSessionContext, useVoiceAssistant } from '@livekit/components-react';
 import { AgentSessionView_01 } from '@/components/agents-ui/blocks/agent-session-view-01';
 import { WelcomeView } from '@/components/app/welcome-view';
 
@@ -29,26 +30,40 @@ const VIEW_MOTION_PROPS = {
 
 interface ViewControllerProps {
   isVideoInputSupported: boolean;
+  userName: string;
+  onUserNameChange: (name: string) => void;
 }
 
-export function ViewController({ isVideoInputSupported }: ViewControllerProps) {
-  const { isConnected, start } = useSessionContext();
+export function ViewController({
+  isVideoInputSupported,
+  userName,
+  onUserNameChange,
+}: ViewControllerProps) {
+  const { isConnected, connectionState, start } = useSessionContext();
   const agent = useAgent();
+  const { videoTrack: avatarVideoTrack } = useVoiceAssistant();
   const { resolvedTheme } = useTheme();
+
+  // Keep the welcome screen (with its spinner) up until the avatar's video arrives.
+  const isAvatarReady = isConnected && avatarVideoTrack !== undefined;
+  const isStarting = connectionState !== ConnectionState.Disconnected && !isAvatarReady;
 
   return (
     <AnimatePresence mode="wait">
       {/* Welcome view */}
-      {!isConnected && (
+      {!isAvatarReady && (
         <MotionWelcomeView
           key="welcome"
           {...VIEW_MOTION_PROPS}
           startButtonText="Start call"
           onStartCall={start}
+          userName={userName}
+          onUserNameChange={onUserNameChange}
+          isStarting={isStarting}
         />
       )}
       {/* Session view */}
-      {isConnected && (
+      {isAvatarReady && (
         <MotionSessionView
           key="session-view"
           {...VIEW_MOTION_PROPS}

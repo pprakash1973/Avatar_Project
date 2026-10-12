@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { TokenSource } from 'livekit-client';
 import { useSession } from '@livekit/components-react';
 import { WarningIcon } from '@phosphor-icons/react/dist/ssr';
@@ -36,13 +36,21 @@ export function App({ tokenServerId, tokenEndpoint, agentName, isVideoInputSuppo
     [tokenServerId, tokenEndpoint]
   );
 
-  const session = useSession(tokenSource, agentName ? { agentName } : undefined);
+  const [userName, setUserName] = useState('');
+  const session = useSession(tokenSource, {
+    ...(agentName ? { agentName } : {}),
+    participantName: userName,
+  });
 
   return (
     <AgentSessionProvider session={session}>
       <AppSetup />
       <main className="grid h-svh grid-cols-1 place-content-center">
-        <ViewController isVideoInputSupported={isVideoInputSupported} />
+        <ViewController
+          isVideoInputSupported={isVideoInputSupported}
+          userName={userName}
+          onUserNameChange={setUserName}
+        />
       </main>
       <StartAudioButton label="Start Audio" />
       <Toaster

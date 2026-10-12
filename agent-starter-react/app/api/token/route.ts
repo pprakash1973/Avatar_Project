@@ -46,8 +46,9 @@ export async function POST(req: Request) {
       ? RoomConfiguration.fromJson(body.room_config, { ignoreUnknownFields: true })
       : new RoomConfiguration();
 
-    // Generate participant token
-    const participantName = 'user';
+    // Generate participant token. The agent greets the user by this name.
+    const participantName =
+      typeof body?.participant_name === 'string' ? body.participant_name.trim().slice(0, 50) : '';
     const participantIdentity = `voice_assistant_user_${Math.floor(Math.random() * 10_000)}`;
     const roomName = `voice_assistant_room_${Math.floor(Math.random() * 10_000)}`;
 
