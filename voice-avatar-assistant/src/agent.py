@@ -68,6 +68,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
             "results. What would you like me to do?"
         ),
         "reading_file": "Got your file, give me a moment to read it.",
+        "checking": "Let me check that.",
     },
     "hi": {
         "name": "Hindi",
@@ -79,6 +80,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
             "सकती हूँ। बताइए, मैं आपके लिए क्या करूँ?"
         ),
         "reading_file": "आपकी फ़ाइल मिल गई, मुझे इसे पढ़ने के लिए एक पल दीजिए।",
+        "checking": "एक पल, मैं अभी देखती हूँ।",
     },
     "ta": {
         "name": "Tamil",
@@ -90,6 +92,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
             "முடிவுகளைத் தர முடியும். நான் உங்களுக்கு என்ன செய்ய வேண்டும்?"
         ),
         "reading_file": "உங்கள் கோப்பு கிடைத்தது, அதைப் படிக்க ஒரு நிமிடம் கொடுங்கள்.",
+        "checking": "ஒரு நிமிடம், நான் பார்த்துச் சொல்கிறேன்.",
     },
 }
 
@@ -127,6 +130,7 @@ class Assistant(Agent):
         self._room = room
         self._usage = usage
         self._language_name = LANGUAGES[language]["name"]
+        self._checking_phrase = LANGUAGES[language]["checking"]
 
         context = ""
         if user_name:
@@ -138,8 +142,13 @@ class Assistant(Agent):
             )
         if language != "en":
             context += (
-                f"\n# Language\n\nAlways speak and reply in {self._language_name}, "
-                "even if a tool result or file is in another language.\n"
+                f"\n# Language\n\nAlways speak and reply only in {self._language_name}, "
+                "even if the user, a tool result, or a file uses another language. "
+                f"Use pure, natural spoken {self._language_name} in its native script: "
+                "do not mix in English words or phrases when a common native word "
+                "exists, and spell out numbers in "
+                f"{self._language_name}. Only names of people, places, brands, and "
+                "websites may stay as they are.\n"
             )
 
         super().__init__(
@@ -192,7 +201,7 @@ class Assistant(Agent):
             query: The question or topic to search for.
         """
         logger.info("web_search: %s", query)
-        async with ctx.with_filler("Let me check that.", delay=1.5):
+        async with ctx.with_filler(self._checking_phrase, delay=1.5):
             result = await run_web_search(query, self._language_name, self._usage)
         await send_ui(
             self._room,

@@ -61,6 +61,15 @@ export function ViewController({
     try {
       await start();
     } catch (error) {
+      // A blocked microphone rejects start() even though the call itself connects.
+      if (error instanceof Error && error.name === 'NotAllowedError') {
+        toastAlert({
+          title: 'Microphone blocked',
+          description:
+            'Allow microphone access in your browser to talk to the avatar. You can still type in the chat.',
+        });
+        return;
+      }
       // The token endpoint answers 429 with a readable message when the rate limit is hit.
       const message = error instanceof Error ? error.message : '';
       const rateLimited = message.match(/received 429 \/ ([\s\S]+)$/);

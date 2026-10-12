@@ -54,5 +54,7 @@ async def run_web_search(query: str, language: str, usage: HelperUsage) -> Searc
                 logger.warning("web_search tool error: %s", content)
 
     # Cited answers arrive as several text blocks; join and collapse the spacing.
-    answer = " ".join(" ".join(answer_parts).split()) or "I couldn't find anything on that."
+    answer = (
+        " ".join(" ".join(answer_parts).split()) or "I couldn't find anything on that."
+    )
     return SearchResult(answer=answer, sources=sources[:3])
