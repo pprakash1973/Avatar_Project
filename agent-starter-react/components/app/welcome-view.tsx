@@ -1,6 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CircleNotchIcon } from '@phosphor-icons/react/dist/ssr';
 import { Button } from '@/components/ui/button';
+import { LANGUAGES, type LanguageCode } from '@/lib/agent-channels';
+import { cn } from '@/lib/shadcn/utils';
+import { getSavedName, saveLanguage, saveName } from '@/lib/visitor';
 
 function WelcomeImage() {
   return (
@@ -25,6 +28,8 @@ interface WelcomeViewProps {
   onStartCall: () => void;
   userName: string;
   onUserNameChange: (name: string) => void;
+  language: LanguageCode;
+  onLanguageChange: (language: LanguageCode) => void;
   isStarting: boolean;
 }
 
@@ -33,17 +38,30 @@ export const WelcomeView = ({
   onStartCall,
   userName,
   onUserNameChange,
+  language,
+  onLanguageChange,
   isStarting,
   ref,
 }: React.ComponentProps<'div'> & WelcomeViewProps) => {
   const [nameInput, setNameInput] = useState(userName);
 
+  // Prefill the name a returning visitor used last time.
+  useEffect(() => {
+    setNameInput((current) => current || getSavedName());
+  }, []);
+
   const handleSubmitName = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const name = nameInput.trim();
     if (name) {
+      saveName(name);
       onUserNameChange(name);
     }
+  };
+
+  const handleLanguageChange = (code: LanguageCode) => {
+    saveLanguage(code);
+    onLanguageChange(code);
   };
 
   return (
@@ -82,12 +100,34 @@ export const WelcomeView = ({
               Hi {userName}, chat live with your voice AI assistant
             </p>
 
+            <fieldset className="mt-5 flex flex-col items-center" disabled={isStarting}>
+              <legend className="text-muted-foreground mb-2 w-full text-xs">Language</legend>
+              <div className="border-input flex rounded-full border p-1">
+                {LANGUAGES.map(({ code, label }) => (
+                  <button
+                    key={code}
+                    type="button"
+                    aria-pressed={language === code}
+                    onClick={() => handleLanguageChange(code)}
+                    className={cn(
+                      'rounded-full px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50',
+                      language === code
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+
             <Button
               size="lg"
               onClick={onStartCall}
               disabled={isStarting}
               aria-busy={isStarting}
-              className="mt-6 w-64 rounded-full font-mono text-xs font-bold tracking-wider uppercase"
+              className="mt-5 w-64 rounded-full font-mono text-xs font-bold tracking-wider uppercase"
             >
               {isStarting ? (
                 <>

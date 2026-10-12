@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { TokenSource } from 'livekit-client';
 import { useSession } from '@livekit/components-react';
 import { WarningIcon } from '@phosphor-icons/react/dist/ssr';
@@ -10,6 +10,8 @@ import { ViewController } from '@/components/app/view-controller';
 import { Toaster } from '@/components/ui/sonner';
 import { useAgentErrors } from '@/hooks/useAgentErrors';
 import { useDebugMode } from '@/hooks/useDebug';
+import { LANGUAGES, type LanguageCode } from '@/lib/agent-channels';
+import { getSavedLanguage, getVisitorId } from '@/lib/visitor';
 
 const IN_DEVELOPMENT = process.env.NODE_ENV !== 'production';
 
@@ -37,9 +39,26 @@ export function App({ tokenServerId, tokenEndpoint, agentName, isVideoInputSuppo
   );
 
   const [userName, setUserName] = useState('');
+  const [language, setLanguage] = useState<LanguageCode>('en');
+  const [visitorId, setVisitorId] = useState('');
+
+  // Browser storage is only available after hydration.
+  useEffect(() => {
+    setVisitorId(getVisitorId());
+    const saved = getSavedLanguage();
+    if (LANGUAGES.some((l) => l.code === saved)) {
+      setLanguage(saved as LanguageCode);
+    }
+  }, []);
+
+  const participantAttributes = useMemo(
+    () => ({ language, visitor_id: visitorId }),
+    [language, visitorId]
+  );
   const session = useSession(tokenSource, {
     ...(agentName ? { agentName } : {}),
     participantName: userName,
+    participantAttributes,
   });
 
   return (
@@ -50,6 +69,8 @@ export function App({ tokenServerId, tokenEndpoint, agentName, isVideoInputSuppo
           isVideoInputSupported={isVideoInputSupported}
           userName={userName}
           onUserNameChange={setUserName}
+          language={language}
+          onLanguageChange={setLanguage}
         />
       </main>
       <StartAudioButton label="Start Audio" />

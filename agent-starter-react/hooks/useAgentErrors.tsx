@@ -9,7 +9,7 @@ interface ToastProps {
   description: ReactNode;
 }
 
-function toastAlert(toast: ToastProps) {
+export function toastAlert(toast: ToastProps) {
   const { title, description } = toast;
 
   return sonnerToast.custom(

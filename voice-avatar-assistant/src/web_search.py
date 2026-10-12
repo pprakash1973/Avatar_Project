@@ -1,43 +1,42 @@
 import logging
-import os
+from dataclasses import dataclass, field
 
-from anthropic import AsyncAnthropic
+from claude import HELPER_MODEL, HelperUsage, get_client
 
 logger = logging.getLogger("agent.web_search")
 
-_client: AsyncAnthropic | None = None
+
+@dataclass
+class SearchResult:
+    answer: str
+    sources: list[dict[str, str]] = field(default_factory=list)
 
 
-def _get_client() -> AsyncAnthropic:
-    global _client
-    if _client is None:
-        _client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    return _client
-
-
-async def run_web_search(query: str) -> str:
+async def run_web_search(query: str, language: str, usage: HelperUsage) -> SearchResult:
     """Call the Claude Messages API with the server-side web search tool enabled
-    and return a short, cited summary of the results."""
-    client = _get_client()
-
-    response = await client.messages.create(
-        model="claude-haiku-5-5",
+    and return a short answer plus the sources it used."""
+    response = await get_client().messages.create(
+        model=HELPER_MODEL,
         max_tokens=1024,
-        tools=[{"type": "web_search_20260209", "name": "web_search"}],
+        # Haiku supports only the basic web search tool; the dynamic-filtering
+        # web_search_20260209 variant fails on it with invalid_tool_input.
+        tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
         messages=[
             {
                 "role": "user",
                 "content": (
-                    "Search the web and answer this question in 2-3 sentences, "
-                    "plain text, no markdown. End with the source URLs in "
-                    f"parentheses.\n\nQuestion: {query}"
+                    f"Search the web and answer this question in 2-3 sentences of plain "
+                    f"text in {language}, no markdown and no URLs.\n\nQuestion: {query}"
                 ),
             }
         ],
     )
+    usage.add(response.usage)
+    usage.searches += 1
 
     answer_parts: list[str] = []
-    sources: list[str] = []
+    sources: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
     for block in response.content:
         if block.type == "text":
             answer_parts.append(block.text)
@@ -46,12 +45,14 @@ async def run_web_search(query: str) -> str:
             if isinstance(content, list):
                 for result in content:
                     url = getattr(result, "url", None)
-                    if url and url not in sources:
-                        sources.append(url)
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        sources.append(
+                            {"url": url, "title": getattr(result, "title", "") or url}
+                        )
             else:
                 logger.warning("web_search tool error: %s", content)
 
-    answer = " ".join(answer_parts).strip() or "I couldn't find anything on that."
-    if sources:
-        answer += " (source: " + ", ".join(sources[:3]) + ")"
-    return answer
+    # Cited answers arrive as several text blocks; join and collapse the spacing.
+    answer = " ".join(" ".join(answer_parts).split()) or "I couldn't find anything on that."
+    return SearchResult(answer=answer, sources=sources[:3])

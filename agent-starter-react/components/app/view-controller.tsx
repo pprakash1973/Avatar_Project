@@ -5,7 +5,11 @@ import { ConnectionState } from 'livekit-client';
 import { AnimatePresence, motion } from 'motion/react';
 import { useAgent, useSessionContext, useVoiceAssistant } from '@livekit/components-react';
 import { AgentSessionView_01 } from '@/components/agents-ui/blocks/agent-session-view-01';
+import { SessionPanel } from '@/components/app/session-panel';
 import { WelcomeView } from '@/components/app/welcome-view';
+import { useAgentChannels } from '@/hooks/useAgentChannels';
+import { toastAlert } from '@/hooks/useAgentErrors';
+import type { LanguageCode } from '@/lib/agent-channels';
 
 const MotionWelcomeView = motion.create(WelcomeView);
 const MotionSessionView = motion.create(AgentSessionView_01);
@@ -32,12 +36,16 @@ interface ViewControllerProps {
   isVideoInputSupported: boolean;
   userName: string;
   onUserNameChange: (name: string) => void;
+  language: LanguageCode;
+  onLanguageChange: (language: LanguageCode) => void;
 }
 
 export function ViewController({
   isVideoInputSupported,
   userName,
   onUserNameChange,
+  language,
+  onLanguageChange,
 }: ViewControllerProps) {
   const { isConnected, connectionState, start } = useSessionContext();
   const agent = useAgent();
@@ -47,37 +55,57 @@ export function ViewController({
   // Keep the welcome screen (with its spinner) up until the avatar's video arrives.
   const isAvatarReady = isConnected && avatarVideoTrack !== undefined;
   const isStarting = connectionState !== ConnectionState.Disconnected && !isAvatarReady;
+  const { cards, dismissCard } = useAgentChannels();
+
+  const handleStartCall = async () => {
+    try {
+      await start();
+    } catch (error) {
+      // The token endpoint answers 429 with a readable message when the rate limit is hit.
+      const message = error instanceof Error ? error.message : '';
+      const rateLimited = message.match(/received 429 \/ ([\s\S]+)$/);
+      toastAlert({
+        title: rateLimited ? 'Call limit reached' : 'Could not start the call',
+        description: rateLimited ? rateLimited[1] : 'Please try again in a moment.',
+      });
+    }
+  };
 
   return (
-    <AnimatePresence mode="wait">
-      {/* Welcome view */}
-      {!isAvatarReady && (
-        <MotionWelcomeView
-          key="welcome"
-          {...VIEW_MOTION_PROPS}
-          startButtonText="Start call"
-          onStartCall={start}
-          userName={userName}
-          onUserNameChange={onUserNameChange}
-          isStarting={isStarting}
-        />
-      )}
-      {/* Session view */}
-      {isAvatarReady && (
-        <MotionSessionView
-          key="session-view"
-          {...VIEW_MOTION_PROPS}
-          preConnectMessage={
-            agent.isConnected ? 'Agent is listening, ask it a question' : 'Waiting for agent'
-          }
-          supportsChatInput={true}
-          supportsVideoInput={isVideoInputSupported}
-          supportsScreenShare={isVideoInputSupported}
-          isPreConnectBufferEnabled={true}
-          themeMode={resolvedTheme === 'dark' ? 'dark' : 'light'}
-          className="fixed inset-0"
-        />
-      )}
-    </AnimatePresence>
+    <>
+      <AnimatePresence mode="wait">
+        {/* Welcome view */}
+        {!isAvatarReady && (
+          <MotionWelcomeView
+            key="welcome"
+            {...VIEW_MOTION_PROPS}
+            startButtonText="Start call"
+            onStartCall={handleStartCall}
+            userName={userName}
+            onUserNameChange={onUserNameChange}
+            language={language}
+            onLanguageChange={onLanguageChange}
+            isStarting={isStarting}
+          />
+        )}
+        {/* Session view */}
+        {isAvatarReady && (
+          <MotionSessionView
+            key="session-view"
+            {...VIEW_MOTION_PROPS}
+            preConnectMessage={
+              agent.isConnected ? 'Agent is listening, ask it a question' : 'Waiting for agent'
+            }
+            supportsChatInput={true}
+            supportsVideoInput={isVideoInputSupported}
+            supportsScreenShare={isVideoInputSupported}
+            isPreConnectBufferEnabled={true}
+            themeMode={resolvedTheme === 'dark' ? 'dark' : 'light'}
+            className="fixed inset-0"
+          />
+        )}
+      </AnimatePresence>
+      {isAvatarReady && <SessionPanel cards={cards} onDismiss={dismissCard} />}
+    </>
   );
 }
