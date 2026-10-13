@@ -28,6 +28,7 @@ const SAME_CALL_WINDOW_SECONDS = 30;
 const LANGUAGE_CODES = new Set(['en', 'hi', 'ta', 'ml']);
 const STYLE_CODES = new Set(['friendly', 'professional', 'concise', 'humorous']);
 const VISITOR_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
+const ROOM_NAME_RE = /^voice_assistant_room_[A-Za-z0-9-]{8,64}$/;
 
 function clientIp(req: Request): string {
   return (
@@ -109,7 +110,11 @@ export async function POST(req: Request) {
       attributes.visitor_id = requested.visitor_id;
     }
     const participantIdentity = `voice_assistant_user_${Math.floor(Math.random() * 10_000)}`;
-    const roomName = `voice_assistant_room_${Math.floor(Math.random() * 10_000)}`;
+    // The client picks a fresh room name per call; fall back to a random one.
+    const roomName =
+      typeof body?.room_name === 'string' && ROOM_NAME_RE.test(body.room_name)
+        ? body.room_name
+        : `voice_assistant_room_${crypto.randomUUID()}`;
 
     const participantToken = await createParticipantToken(
       { identity: participantIdentity, name: participantName, attributes },
