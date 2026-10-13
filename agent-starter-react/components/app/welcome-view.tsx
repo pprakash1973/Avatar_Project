@@ -67,8 +67,8 @@ interface WelcomeViewProps {
   onUserNameChange: (name: string) => void;
   language: LanguageCode;
   onLanguageChange: (language: LanguageCode) => void;
-  style: StyleCode;
-  onStyleChange: (style: StyleCode) => void;
+  conversationStyle: StyleCode;
+  onConversationStyleChange: (style: StyleCode) => void;
   adaptToMood: boolean;
   onAdaptToMoodChange: (adapt: boolean) => void;
   isStarting: boolean;
@@ -81,8 +81,8 @@ export const WelcomeView = ({
   onUserNameChange,
   language,
   onLanguageChange,
-  style,
-  onStyleChange,
+  conversationStyle,
+  onConversationStyleChange,
   adaptToMood,
   onAdaptToMoodChange,
   isStarting,
@@ -111,7 +111,7 @@ export const WelcomeView = ({
 
   const handleStyleChange = (code: StyleCode) => {
     saveStyle(code);
-    onStyleChange(code);
+    onConversationStyleChange(code);
   };
 
   const handleAdaptChange = (adapt: boolean) => {
@@ -169,7 +169,7 @@ export const WelcomeView = ({
               <ChoiceGroup
                 legend="Style"
                 options={STYLES}
-                value={style}
+                value={conversationStyle}
                 onChange={handleStyleChange}
               />
               <label className="text-muted-foreground flex items-center gap-2 text-xs">

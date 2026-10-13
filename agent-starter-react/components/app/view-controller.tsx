@@ -39,8 +39,8 @@ interface ViewControllerProps {
   onUserNameChange: (name: string) => void;
   language: LanguageCode;
   onLanguageChange: (language: LanguageCode) => void;
-  style: StyleCode;
-  onStyleChange: (style: StyleCode) => void;
+  conversationStyle: StyleCode;
+  onConversationStyleChange: (style: StyleCode) => void;
   adaptToMood: boolean;
   onAdaptToMoodChange: (adapt: boolean) => void;
 }
@@ -51,8 +51,8 @@ export function ViewController({
   onUserNameChange,
   language,
   onLanguageChange,
-  style,
-  onStyleChange,
+  conversationStyle,
+  onConversationStyleChange,
   adaptToMood,
   onAdaptToMoodChange,
 }: ViewControllerProps) {
@@ -69,7 +69,7 @@ export function ViewController({
     onStyleChange: (newStyle, adapt) => {
       saveStyle(newStyle);
       saveAdapt(adapt);
-      onStyleChange(newStyle);
+      onConversationStyleChange(newStyle);
       onAdaptToMoodChange(adapt);
     },
   });
@@ -111,6 +111,10 @@ export function ViewController({
             onUserNameChange={onUserNameChange}
             language={language}
             onLanguageChange={onLanguageChange}
+            conversationStyle={conversationStyle}
+            onConversationStyleChange={onConversationStyleChange}
+            adaptToMood={adaptToMood}
+            onAdaptToMoodChange={onAdaptToMoodChange}
             isStarting={isStarting}
           />
         )}

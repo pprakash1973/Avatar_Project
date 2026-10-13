@@ -78,8 +78,8 @@ export function App({ tokenServerId, tokenEndpoint, agentName, isVideoInputSuppo
           onUserNameChange={setUserName}
           language={language}
           onLanguageChange={setLanguage}
-          style={style}
-          onStyleChange={setStyle}
+          conversationStyle={style}
+          onConversationStyleChange={setStyle}
           adaptToMood={adaptToMood}
           onAdaptToMoodChange={setAdaptToMood}
         />
