@@ -7,6 +7,7 @@ const LANGUAGE_KEY = 'avatar.language';
 const STYLE_KEY = 'avatar.style';
 const ADAPT_KEY = 'avatar.adapt';
 const MICROPHONE_KEY = 'avatar.microphone';
+const SPEAKER_KEY = 'avatar.speaker';
 
 function read(key: string): string | null {
   try {
@@ -43,3 +44,5 @@ export const getSavedAdapt = () => read(ADAPT_KEY) !== '0';
 export const saveAdapt = (adapt: boolean) => write(ADAPT_KEY, adapt ? '1' : '0');
 export const getSavedMicrophoneId = () => read(MICROPHONE_KEY) ?? '';
 export const saveMicrophoneId = (deviceId: string) => write(MICROPHONE_KEY, deviceId);
+export const getSavedSpeakerId = () => read(SPEAKER_KEY) ?? '';
+export const saveSpeakerId = (deviceId: string) => write(SPEAKER_KEY, deviceId);

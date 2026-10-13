@@ -10,7 +10,7 @@ import { WelcomeView } from '@/components/app/welcome-view';
 import { useAgentChannels } from '@/hooks/useAgentChannels';
 import { toastAlert } from '@/hooks/useAgentErrors';
 import type { LanguageCode, StyleCode } from '@/lib/agent-channels';
-import { getSavedMicrophoneId, saveAdapt, saveStyle } from '@/lib/visitor';
+import { getSavedMicrophoneId, getSavedSpeakerId, saveAdapt, saveStyle } from '@/lib/visitor';
 
 const MotionWelcomeView = motion.create(WelcomeView);
 const MotionSessionView = motion.create(AgentSessionView_01);
@@ -75,11 +75,16 @@ export function ViewController({
   });
 
   const handleStartCall = async () => {
-    // Use the microphone picked on the start screen (e.g. a Bluetooth headset);
+    // Use the microphone and speaker picked on the start screen (e.g. a Bluetooth headset);
     // set before connecting so the call's mic track is created on that device.
     const microphoneId = getSavedMicrophoneId();
     if (microphoneId) {
       await room.switchActiveDevice('audioinput', microphoneId).catch(() => {});
+    }
+    // The SDK keeps this and applies it to the avatar's audio once it joins.
+    const speakerId = getSavedSpeakerId();
+    if (speakerId) {
+      await room.switchActiveDevice('audiooutput', speakerId).catch(() => {});
     }
     try {
       await start();
