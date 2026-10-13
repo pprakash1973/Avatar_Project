@@ -63,6 +63,8 @@ export function App({ tokenServerId, tokenEndpoint, agentName, isVideoInputSuppo
     [language, visitorId, style, adaptToMood]
   );
   const session = useSession(tokenSource, {
+    // LiveKit Cloud stops an idle agent; waking it can take ~30 s (default is 20 s).
+    agentConnectTimeoutMilliseconds: 60_000,
     ...(agentName ? { agentName } : {}),
     participantName: userName,
     participantAttributes,

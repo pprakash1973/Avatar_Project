@@ -104,6 +104,17 @@ export const WelcomeView = ({
     }
   };
 
+  // After a few seconds of loading, explain that an idle assistant is waking up.
+  const [isSlowStart, setIsSlowStart] = useState(false);
+  useEffect(() => {
+    if (!isStarting) {
+      setIsSlowStart(false);
+      return;
+    }
+    const timer = setTimeout(() => setIsSlowStart(true), 8_000);
+    return () => clearTimeout(timer);
+  }, [isStarting]);
+
   const handleLanguageChange = (code: LanguageCode) => {
     saveLanguage(code);
     onLanguageChange(code);
@@ -194,7 +205,7 @@ export const WelcomeView = ({
               {isStarting ? (
                 <>
                   <CircleNotchIcon weight="bold" className="size-4 animate-spin" />
-                  Loading avatar…
+                  {isSlowStart ? 'Waking up the assistant…' : 'Loading avatar…'}
                 </>
               ) : (
                 startButtonText

@@ -69,7 +69,11 @@ FILE_UPLOAD_TOPIC = "file-upload"
 UI_CARD_TOPIC = "ui-card"
 UI_STATUS_TOPIC = "ui-status"
 
-StyleName = Literal["friendly", "professional", "concise", "humorous"]
+# No defaults on enum tool params: LiveKit makes defaulted params nullable, and the
+# Claude API rejects an enum typed ["string", "null"], failing every LLM request.
+# Both params are required and take an explicit "unchanged" instead.
+StyleChoice = Literal["friendly", "professional", "concise", "humorous", "unchanged"]
+MoodChoice = Literal["on", "off", "unchanged"]
 TOOL_FAILED = "The search failed. Tell the user once and offer to try again."
 
 
@@ -354,20 +358,20 @@ class Assistant(Agent):
     async def set_conversation_style(
         self,
         ctx: RunContext,
-        style: StyleName | None = None,
-        adapt_to_mood: bool | None = None,
+        style: StyleChoice,
+        adapt_to_mood: MoodChoice,
     ) -> str:
         """Change how you talk when the user asks, e.g. "be more professional",
         "keep it short", "be funny", or "stop adapting to my mood".
 
         Args:
-            style: friendly, professional, concise or humorous; omit to keep the current one.
-            adapt_to_mood: Whether to adapt tone to cues like urgency or frustration; omit to keep it.
+            style: The new style, or "unchanged" to keep the current one.
+            adapt_to_mood: "on" or "off" to adapt tone to cues like urgency or frustration, or "unchanged".
         """
         if style in STYLES:
             self.style = style
-        if adapt_to_mood is not None:
-            self.adapt_to_mood = adapt_to_mood
+        if adapt_to_mood != "unchanged":
+            self.adapt_to_mood = adapt_to_mood == "on"
         await self.update_instructions(self._instructions())
         await send_ui(
             self._room,
@@ -516,7 +520,13 @@ async def entrypoint(ctx: JobContext) -> None:
     # The frontend sends the name typed on the welcome screen as the participant
     # name, and the language, style and a per-browser visitor id as attributes.
     # The avatar joins as an "agent" participant, so it is never matched here.
-    participant = await ctx.wait_for_participant()
+    try:
+        participant = await asyncio.wait_for(ctx.wait_for_participant(), 60)
+    except (TimeoutError, RuntimeError) as e:
+        # The visitor gave up before the agent joined (e.g. while it was waking up).
+        logger.info("no participant to talk to: %s", e)
+        ctx.shutdown("participant left")
+        return
     attributes = participant.attributes
     user_name = participant.name.strip()
     language = attributes.get("language", "en")
