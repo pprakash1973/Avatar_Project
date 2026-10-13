@@ -15,7 +15,8 @@ export const PRICING = {
   deepgramPerMinute: 0.0077,
   // Cartesia Sonic-3 TTS, $ per character (Pro plan overage)
   cartesiaPerChar: 0.000065,
-  // Anam avatar, $ per minute (Starter plan overage)
+  // Avatar, $ per minute: Simli pay-as-you-go, Anam Starter plan overage
+  simliPerMinute: 0.05,
   anamPerMinute: 0.16,
   // LiveKit Cloud agent session, $ per minute
   livekitPerMinute: 0.01,
@@ -27,6 +28,7 @@ export type CallRecord = {
   name: string;
   visitor_id: string;
   language: string;
+  avatar_provider?: 'simli' | 'anam';
   started_at: string;
   status: 'ok' | 'busy';
   duration_s: number;
@@ -47,7 +49,7 @@ export type CostBreakdown = {
   webSearch: number;
   deepgram: number;
   cartesia: number;
-  anam: number;
+  avatar: number;
   livekit: number;
   total: number;
 };
@@ -67,15 +69,16 @@ export function estimateCost(call: CallRecord): CostBreakdown {
   const webSearch = (call.web_search_requests ?? 0) * p.webSearchPerRequest;
   const deepgram = ((call.stt_seconds ?? 0) / 60) * p.deepgramPerMinute;
   const cartesia = (call.tts_characters ?? 0) * p.cartesiaPerChar;
-  const anam = minutes * p.anamPerMinute;
+  // Calls recorded before the Simli switch carry no provider and used Anam.
+  const avatar = minutes * (call.avatar_provider === 'simli' ? p.simliPerMinute : p.anamPerMinute);
   const livekit = minutes * p.livekitPerMinute;
   return {
     claude,
     webSearch,
     deepgram,
     cartesia,
-    anam,
+    avatar,
     livekit,
-    total: claude + webSearch + deepgram + cartesia + anam + livekit,
+    total: claude + webSearch + deepgram + cartesia + avatar + livekit,
   };
 }

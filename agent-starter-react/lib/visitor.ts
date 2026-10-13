@@ -4,6 +4,8 @@
 const VISITOR_ID_KEY = 'avatar.visitorId';
 const NAME_KEY = 'avatar.name';
 const LANGUAGE_KEY = 'avatar.language';
+const STYLE_KEY = 'avatar.style';
+const ADAPT_KEY = 'avatar.adapt';
 
 function read(key: string): string | null {
   try {
@@ -34,3 +36,7 @@ export const getSavedName = () => read(NAME_KEY) ?? '';
 export const saveName = (name: string) => write(NAME_KEY, name);
 export const getSavedLanguage = () => read(LANGUAGE_KEY);
 export const saveLanguage = (language: string) => write(LANGUAGE_KEY, language);
+export const getSavedStyle = () => read(STYLE_KEY);
+export const saveStyle = (style: string) => write(STYLE_KEY, style);
+export const getSavedAdapt = () => read(ADAPT_KEY) !== '0';
+export const saveAdapt = (adapt: boolean) => write(ADAPT_KEY, adapt ? '1' : '0');

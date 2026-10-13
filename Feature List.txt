@@ -1,0 +1,96 @@
+F01 — Travel & Booking Concierge
+
+Priority: P1 — High
+
+Provide a unified interface for travel research and booking assistance.
+
+Functional requirements:
+
+Search flights by origin, destination, dates, passenger count, and cabin class.
+
+Compare fares, schedules, baggage allowances, and cancellation policies.
+
+Search hotels by destination, dates, guest count, budget, location, and amenities.
+
+Compare ratings, prices, availability, and booking conditions.
+
+Support train and ground-transport research where integrations are available.
+
+Generate itineraries and estimated trip budgets.
+
+Provide booking links or integrate with authorized booking providers.
+
+Track flight status and travel-related changes when supported.
+
+Monitor prices when a suitable data source supports price tracking.
+
+Send reminders for upcoming travel events.
+
+Acceptance criteria:
+
+Search results reflect the requested dates and constraints.
+
+Prices and availability include their source and retrieval time where possible.
+
+Estimated prices are clearly distinguished from confirmed prices.
+
+Booking is completed only through a supported provider and with user approval.
+
+Visual Understanding & Screen Assistance
+
+Priority: P2 — Later Phase
+
+Allow the assistant to analyze user-provided images, screenshots, or explicitly shared screen content.
+
+Functional requirements:
+
+Accept screenshots and image uploads.
+
+Analyze visible interface elements, charts, and error messages.
+
+Answer questions about supplied visual content.
+
+Explain forms and provide step-by-step guidance.
+
+Support live screen analysis only when the necessary capture capabilities and user permissions are available.
+
+Avoid storing visual data without appropriate consent.
+
+Example:
+"Look at this error message and explain how I can fix it."
+
+Acceptance criteria:
+
+Responses are grounded in the supplied image or screen.
+
+Unreadable content is identified as uncertain.
+
+The assistant does not claim to see a screen or camera feed unless that capability is active.
+
+F13 — Contextual & Emotion-Aware Conversation
+
+Priority: P2 — Later Phase
+
+Improve conversational naturalness and response adaptation.
+
+Functional requirements:
+
+Recognize conversational cues such as urgency, frustration, and uncertainty.
+
+Adjust response length, tone, and pacing.
+
+Support configurable assistant personalities.
+
+Maintain context across follow-up questions.
+
+Allow users to select professional, friendly, concise, or humorous styles.
+
+Avoid claiming certainty about a user's emotions.
+
+Acceptance criteria:
+
+The assistant responds appropriately to explicit user preferences.
+
+Personality settings do not compromise factual accuracy.
+
+Users can change or disable conversational adaptations.

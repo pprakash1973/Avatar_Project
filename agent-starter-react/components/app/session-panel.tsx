@@ -3,9 +3,11 @@
 import { useRef, useState } from 'react';
 import { useSessionContext } from '@livekit/components-react';
 import {
+  AirplaneTiltIcon,
   CircleNotchIcon,
   FileTextIcon,
   GlobeIcon,
+  MapTrifoldIcon,
   PaperclipIcon,
   WarningIcon,
   XIcon,
@@ -22,6 +24,13 @@ function hostname(url: string) {
   } catch {
     return url;
   }
+}
+
+function retrievedAt(iso: string) {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime())
+    ? ''
+    : date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
 function FileUploadButton() {
@@ -127,6 +136,99 @@ function CardBody({ card }: { card: CardWithId }) {
               ))}
             </ul>
           )}
+        </>
+      );
+    case 'travel':
+      return (
+        <>
+          <p className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+            <AirplaneTiltIcon weight="bold" className="size-3.5 shrink-0" />
+            <span className="truncate">{card.title}</span>
+          </p>
+          <p className="mt-2">{card.summary}</p>
+          <ul className="mt-2 flex flex-col gap-2">
+            {card.options.map((option) => (
+              <li key={`${option.name}-${option.price}`} className="border-t pt-2">
+                <p className="flex items-baseline justify-between gap-2">
+                  <span className="font-semibold">{option.name}</span>
+                  <span className="shrink-0 tabular-nums">{option.price}</span>
+                </p>
+                <p className="text-muted-foreground text-xs">{option.details}</p>
+                {option.source_url.startsWith('http') && (
+                  <a
+                    href={option.source_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs underline underline-offset-2"
+                  >
+                    Source: {hostname(option.source_url)}
+                  </a>
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="text-muted-foreground mt-2 text-xs">
+            Estimated prices from public websites, checked {retrievedAt(card.retrieved_at)}. Confirm
+            the final price and availability when booking.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {card.booking_links.map((link) => (
+              <a
+                key={link.url}
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="border-input hover:bg-accent rounded-full border px-3 py-1 text-xs font-medium"
+              >
+                Book on {link.label}
+              </a>
+            ))}
+          </div>
+        </>
+      );
+    case 'itinerary':
+      return (
+        <>
+          <p className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+            <MapTrifoldIcon weight="bold" className="size-3.5 shrink-0" />
+            <span className="truncate">Itinerary</span>
+          </p>
+          <p className="mt-2 font-semibold">{card.title}</p>
+          <p className="mt-1">{card.summary}</p>
+          <ol className="mt-2 flex flex-col gap-2">
+            {card.days.map((day) => (
+              <li key={day.day}>
+                <p className="font-medium">
+                  {day.day}: {day.title}
+                </p>
+                <p className="text-muted-foreground text-xs">{day.plan}</p>
+              </li>
+            ))}
+          </ol>
+          {card.budget.length > 0 && (
+            <table className="mt-3 w-full text-xs">
+              <caption className="text-muted-foreground mb-1 text-left">Estimated budget</caption>
+              <tbody>
+                {card.budget.map((line) => (
+                  <tr key={line.item} className="border-t">
+                    <th scope="row" className="py-1 pr-2 text-left font-normal">
+                      {line.item}
+                    </th>
+                    <td className="py-1 text-right tabular-nums">{line.amount}</td>
+                  </tr>
+                ))}
+                <tr className="border-t font-semibold">
+                  <th scope="row" className="py-1 pr-2 text-left">
+                    Total
+                  </th>
+                  <td className="py-1 text-right tabular-nums">{card.total_estimate}</td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+          <p className="text-muted-foreground mt-2 text-xs">
+            Costs are estimates from public websites, checked {retrievedAt(card.retrieved_at)}.
+          </p>
         </>
       );
     case 'file_error':

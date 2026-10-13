@@ -21,7 +21,7 @@ version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
-    { name = "livekit-agents", extra = ["anam", "anthropic", "cartesia", "deepgram"] },
+    { name = "livekit-agents", extra = ["anam", "anthropic", "cartesia", "deepgram", "simli"] },
     { name = "livekit-plugins-ai-coustics" },
     { name = "python-docx" },
     { name = "python-dotenv" },
@@ -37,7 +37,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.125.0" },
-    { name = "livekit-agents", extras = ["anam", "anthropic", "cartesia", "deepgram"], specifier = "~=1.8" },
+    { name = "livekit-agents", extras = ["anam", "anthropic", "cartesia", "deepgram", "simli"], specifier = "~=1.8" },
     { name = "livekit-plugins-ai-coustics", specifier = "~=0.3" },
     { name = "python-docx", specifier = ">=1.2.0" },
     { name = "python-dotenv" },
@@ -1124,6 +1124,9 @@ codecs = [
 deepgram = [
     { name = "livekit-plugins-deepgram" },
 ]
+simli = [
+    { name = "livekit-plugins-simli" },
+]
 
 [[package]]
 name = "livekit-api"
@@ -1278,6 +1281,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ed/01/2f7e84cd900556b5753938b22f8dc231a9d8abc314a3306c0be7b95cf7f4/livekit_plugins_deepgram-1.8.6.tar.gz", hash = "sha256:54a1a37b8e2bd55c08202d13f282fb7575135c023ef82e9153f3f8a834c6c7d8", size = 26206, upload-time = "2026-10-09T22:12:49.82Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6d/12/196d2e59e5627dd805979c1389455906a3bb7cb18fc2f55234e24f92cf42/livekit_plugins_deepgram-1.8.6-py3-none-any.whl", hash = "sha256:061e2b3a9b3d4ed1784739252e88294e2ea4ea80078f61aa3099a10873bd5a8e", size = 33137, upload-time = "2026-10-09T22:12:48.461Z" },
+]
+
+[[package]]
+name = "livekit-plugins-simli"
+version = "1.8.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "livekit-agents" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c2/5c/28e3d699522299c30a0e526a4eff18eeab4a47e6e62e9e85a1a2b3f0849f/livekit_plugins_simli-1.8.6.tar.gz", hash = "sha256:4de007420b566192635baecd8960ede99b1eacd897aa051c045a0cbfb78bb4f9", size = 5198, upload-time = "2026-10-09T22:14:34.87Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d4/3b/415073d9a9343108b850c8cd0df1095e69732ec3a34ea57240a0e2d8baee/livekit_plugins_simli-1.8.6-py3-none-any.whl", hash = "sha256:0f372c35afd4f854f0a6ec6cdc9f4467c4115ecab62c75819e12f546cf4c6bd8", size = 5275, upload-time = "2026-10-09T22:14:33.684Z" },
 ]
 
 [[package]]

@@ -1,9 +1,46 @@
 import { useEffect, useState } from 'react';
 import { CircleNotchIcon } from '@phosphor-icons/react/dist/ssr';
 import { Button } from '@/components/ui/button';
-import { LANGUAGES, type LanguageCode } from '@/lib/agent-channels';
+import { LANGUAGES, type LanguageCode, STYLES, type StyleCode } from '@/lib/agent-channels';
 import { cn } from '@/lib/shadcn/utils';
-import { getSavedName, saveLanguage, saveName } from '@/lib/visitor';
+import { getSavedName, saveAdapt, saveLanguage, saveName, saveStyle } from '@/lib/visitor';
+
+interface ChoiceGroupProps<T extends string> {
+  legend: string;
+  options: readonly { code: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+}
+
+function ChoiceGroup<T extends string>({ legend, options, value, onChange }: ChoiceGroupProps<T>) {
+  return (
+    <div className="flex flex-col items-center">
+      <p className="text-muted-foreground mb-2 text-xs">{legend}</p>
+      <div
+        role="group"
+        aria-label={legend}
+        className="border-input flex flex-wrap justify-center gap-1 rounded-3xl border p-1"
+      >
+        {options.map(({ code, label }) => (
+          <button
+            key={code}
+            type="button"
+            aria-pressed={value === code}
+            onClick={() => onChange(code)}
+            className={cn(
+              'rounded-full px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50',
+              value === code
+                ? 'bg-primary text-primary-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function WelcomeImage() {
   return (
@@ -30,6 +67,10 @@ interface WelcomeViewProps {
   onUserNameChange: (name: string) => void;
   language: LanguageCode;
   onLanguageChange: (language: LanguageCode) => void;
+  style: StyleCode;
+  onStyleChange: (style: StyleCode) => void;
+  adaptToMood: boolean;
+  onAdaptToMoodChange: (adapt: boolean) => void;
   isStarting: boolean;
 }
 
@@ -40,6 +81,10 @@ export const WelcomeView = ({
   onUserNameChange,
   language,
   onLanguageChange,
+  style,
+  onStyleChange,
+  adaptToMood,
+  onAdaptToMoodChange,
   isStarting,
   ref,
 }: React.ComponentProps<'div'> & WelcomeViewProps) => {
@@ -62,6 +107,16 @@ export const WelcomeView = ({
   const handleLanguageChange = (code: LanguageCode) => {
     saveLanguage(code);
     onLanguageChange(code);
+  };
+
+  const handleStyleChange = (code: StyleCode) => {
+    saveStyle(code);
+    onStyleChange(code);
+  };
+
+  const handleAdaptChange = (adapt: boolean) => {
+    saveAdapt(adapt);
+    onAdaptToMoodChange(adapt);
   };
 
   return (
@@ -100,26 +155,33 @@ export const WelcomeView = ({
               Hi {userName}, chat live with your voice AI assistant
             </p>
 
-            <fieldset className="mt-5 flex flex-col items-center" disabled={isStarting}>
-              <legend className="text-muted-foreground mb-2 w-full text-xs">Language</legend>
-              <div className="border-input flex rounded-full border p-1">
-                {LANGUAGES.map(({ code, label }) => (
-                  <button
-                    key={code}
-                    type="button"
-                    aria-pressed={language === code}
-                    onClick={() => handleLanguageChange(code)}
-                    className={cn(
-                      'rounded-full px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50',
-                      language === code
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:text-foreground'
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+            <fieldset
+              className="mt-5 flex max-w-md flex-col items-center gap-4"
+              disabled={isStarting}
+            >
+              <legend className="sr-only">Call settings</legend>
+              <ChoiceGroup
+                legend="Language"
+                options={LANGUAGES}
+                value={language}
+                onChange={handleLanguageChange}
+              />
+              <ChoiceGroup
+                legend="Style"
+                options={STYLES}
+                value={style}
+                onChange={handleStyleChange}
+              />
+              <label className="text-muted-foreground flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={adaptToMood}
+                  onChange={(e) => handleAdaptChange(e.target.checked)}
+                  className="accent-primary size-4"
+                />
+                Adapt to my mood (shorter when I&apos;m in a hurry, step by step when I&apos;m
+                stuck)
+              </label>
             </fieldset>
 
             <Button

@@ -10,7 +10,7 @@ requires-python = ">=3.10, <3.15"
 
 dependencies = [
     "anthropic>=0.125.0",
-    "livekit-agents[anam,anthropic,cartesia,deepgram]~=1.8",
+    "livekit-agents[anam,anthropic,cartesia,deepgram,simli]~=1.8",
     "livekit-plugins-ai-coustics~=0.3",
     "python-docx>=1.2.0",
     "python-dotenv",

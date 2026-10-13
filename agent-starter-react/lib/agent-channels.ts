@@ -27,14 +27,44 @@ export type FileErrorCard = {
   reason: string;
 };
 
-export type AgentCard = SearchCard | FileCard | FileErrorCard;
+export type TravelCard = {
+  type: 'travel';
+  kind: 'flights' | 'hotels' | 'trains' | 'buses';
+  title: string;
+  summary: string;
+  options: { name: string; details: string; price: string; source_url: string }[];
+  booking_links: { label: string; url: string }[];
+  retrieved_at: string;
+};
 
-export type AgentStatus = { type: 'busy' };
+export type ItineraryCard = {
+  type: 'itinerary';
+  title: string;
+  summary: string;
+  days: { day: string; title: string; plan: string }[];
+  budget: { item: string; amount: string }[];
+  total_estimate: string;
+  retrieved_at: string;
+};
+
+export type AgentCard = SearchCard | FileCard | FileErrorCard | TravelCard | ItineraryCard;
+
+export type AgentStatus = { type: 'busy' } | { type: 'style'; style: StyleCode; adapt: boolean };
 
 export const LANGUAGES = [
   { code: 'en', label: 'English' },
   { code: 'hi', label: 'हिन्दी (Hindi)' },
   { code: 'ta', label: 'தமிழ் (Tamil)' },
+  { code: 'ml', label: 'മലയാളം (Malayalam)' },
 ] as const;
 
 export type LanguageCode = (typeof LANGUAGES)[number]['code'];
+
+export const STYLES = [
+  { code: 'friendly', label: 'Friendly' },
+  { code: 'professional', label: 'Professional' },
+  { code: 'concise', label: 'Concise' },
+  { code: 'humorous', label: 'Humorous' },
+] as const;
+
+export type StyleCode = (typeof STYLES)[number]['code'];

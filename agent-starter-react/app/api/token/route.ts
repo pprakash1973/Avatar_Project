@@ -25,7 +25,8 @@ export const revalidate = 0;
 const CALLS_PER_HOUR = Number(process.env.RATE_LIMIT_CALLS_PER_HOUR ?? 5);
 // A single call can fetch several tokens; requests within this window count once.
 const SAME_CALL_WINDOW_SECONDS = 30;
-const LANGUAGE_CODES = new Set(['en', 'hi', 'ta']);
+const LANGUAGE_CODES = new Set(['en', 'hi', 'ta', 'ml']);
+const STYLE_CODES = new Set(['friendly', 'professional', 'concise', 'humorous']);
 const VISITOR_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 
 function clientIp(req: Request): string {
@@ -101,6 +102,8 @@ export async function POST(req: Request) {
     const requested = body?.participant_attributes ?? {};
     const attributes: Record<string, string> = {
       language: LANGUAGE_CODES.has(requested.language) ? requested.language : 'en',
+      style: STYLE_CODES.has(requested.style) ? requested.style : 'friendly',
+      adapt: requested.adapt === '0' ? '0' : '1',
     };
     if (typeof requested.visitor_id === 'string' && VISITOR_ID_RE.test(requested.visitor_id)) {
       attributes.visitor_id = requested.visitor_id;

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSessionContext } from '@livekit/components-react';
 import { toastAlert } from '@/hooks/useAgentErrors';
 import {
   type AgentCard,
   type AgentStatus,
+  type StyleCode,
   UI_CARD_TOPIC,
   UI_STATUS_TOPIC,
 } from '@/lib/agent-channels';
@@ -13,9 +14,15 @@ const MAX_CARDS = 6;
 export type CardWithId = AgentCard & { id: string };
 
 /** Receives on-screen cards and status messages the agent sends during a call. */
-export function useAgentChannels() {
+interface AgentChannelOptions {
+  onStyleChange?: (style: StyleCode, adaptToMood: boolean) => void;
+}
+
+export function useAgentChannels({ onStyleChange }: AgentChannelOptions = {}) {
   const { room, isConnected, end } = useSessionContext();
   const [cards, setCards] = useState<CardWithId[]>([]);
+  const onStyleChangeRef = useRef(onStyleChange);
+  onStyleChangeRef.current = onStyleChange;
 
   useEffect(() => {
     room.registerTextStreamHandler(UI_CARD_TOPIC, async (reader) => {
@@ -29,12 +36,14 @@ export function useAgentChannels() {
     room.registerTextStreamHandler(UI_STATUS_TOPIC, async (reader) => {
       try {
         const status = JSON.parse(await reader.readAll()) as AgentStatus;
-        if (status.type === 'busy') {
+        if (status.type === 'style') {
+          onStyleChangeRef.current?.(status.style, status.adapt);
+        } else if (status.type === 'busy') {
           end();
           toastAlert({
-            title: 'The avatar is busy',
+            title: 'The avatar is busy or unavailable',
             description:
-              'Someone else is talking to the avatar right now. Please try again in a minute.',
+              'Someone else may be talking to the avatar, or its free minutes are used up. Please try again later.',
           });
         }
       } catch (error) {

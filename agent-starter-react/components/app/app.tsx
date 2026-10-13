@@ -10,8 +10,8 @@ import { ViewController } from '@/components/app/view-controller';
 import { Toaster } from '@/components/ui/sonner';
 import { useAgentErrors } from '@/hooks/useAgentErrors';
 import { useDebugMode } from '@/hooks/useDebug';
-import { LANGUAGES, type LanguageCode } from '@/lib/agent-channels';
-import { getSavedLanguage, getVisitorId } from '@/lib/visitor';
+import { LANGUAGES, type LanguageCode, STYLES, type StyleCode } from '@/lib/agent-channels';
+import { getSavedAdapt, getSavedLanguage, getSavedStyle, getVisitorId } from '@/lib/visitor';
 
 const IN_DEVELOPMENT = process.env.NODE_ENV !== 'production';
 
@@ -41,6 +41,8 @@ export function App({ tokenServerId, tokenEndpoint, agentName, isVideoInputSuppo
   const [userName, setUserName] = useState('');
   const [language, setLanguage] = useState<LanguageCode>('en');
   const [visitorId, setVisitorId] = useState('');
+  const [style, setStyle] = useState<StyleCode>('friendly');
+  const [adaptToMood, setAdaptToMood] = useState(true);
 
   // Browser storage is only available after hydration.
   useEffect(() => {
@@ -49,11 +51,16 @@ export function App({ tokenServerId, tokenEndpoint, agentName, isVideoInputSuppo
     if (LANGUAGES.some((l) => l.code === saved)) {
       setLanguage(saved as LanguageCode);
     }
+    const savedStyle = getSavedStyle();
+    if (STYLES.some((s) => s.code === savedStyle)) {
+      setStyle(savedStyle as StyleCode);
+    }
+    setAdaptToMood(getSavedAdapt());
   }, []);
 
   const participantAttributes = useMemo(
-    () => ({ language, visitor_id: visitorId }),
-    [language, visitorId]
+    () => ({ language, visitor_id: visitorId, style, adapt: adaptToMood ? '1' : '0' }),
+    [language, visitorId, style, adaptToMood]
   );
   const session = useSession(tokenSource, {
     ...(agentName ? { agentName } : {}),
@@ -71,6 +78,10 @@ export function App({ tokenServerId, tokenEndpoint, agentName, isVideoInputSuppo
           onUserNameChange={setUserName}
           language={language}
           onLanguageChange={setLanguage}
+          style={style}
+          onStyleChange={setStyle}
+          adaptToMood={adaptToMood}
+          onAdaptToMoodChange={setAdaptToMood}
         />
       </main>
       <StartAudioButton label="Start Audio" />

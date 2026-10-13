@@ -8,7 +8,7 @@ export const metadata: Metadata = { title: 'Usage dashboard' };
 const RECENT_CALLS = 200;
 
 const PROVIDERS: { key: Exclude<keyof CostBreakdown, 'total'>; label: string }[] = [
-  { key: 'anam', label: 'Anam (avatar)' },
+  { key: 'avatar', label: 'Avatar (Simli / Anam)' },
   { key: 'claude', label: 'Claude (conversation, files, memory)' },
   { key: 'webSearch', label: 'Claude web search' },
   { key: 'livekit', label: 'LiveKit Cloud (agent)' },
@@ -16,7 +16,12 @@ const PROVIDERS: { key: Exclude<keyof CostBreakdown, 'total'>; label: string }[]
   { key: 'deepgram', label: 'Deepgram (speech-to-text)' },
 ];
 
-const LANGUAGE_LABELS: Record<string, string> = { en: 'English', hi: 'Hindi', ta: 'Tamil' };
+const LANGUAGE_LABELS: Record<string, string> = {
+  en: 'English',
+  hi: 'Hindi',
+  ta: 'Tamil',
+  ml: 'Malayalam',
+};
 
 const usd = (value: number) =>
   value.toLocaleString('en-US', {
@@ -90,7 +95,7 @@ export default async function AdminPage() {
           note={completed.length ? `${usd(totalCost / completed.length)} per call` : undefined}
         />
         <StatTile label="Visitors" value={visitors.toLocaleString()} />
-        <StatTile label="Busy rejections" value={busy.toLocaleString()} note="Anam session limit" />
+        <StatTile label="Busy rejections" value={busy.toLocaleString()} note="Avatar plan limit" />
       </section>
 
       <section aria-labelledby="by-provider" className="mt-10">
@@ -121,8 +126,9 @@ export default async function AdminPage() {
           </tbody>
         </table>
         <p className="text-muted-foreground mt-2 text-xs">
-          Rates: Anam ${PRICING.anamPerMinute}/min, LiveKit ${PRICING.livekitPerMinute}/min,
-          Deepgram ${PRICING.deepgramPerMinute}/min, web search ${PRICING.webSearchPerRequest}
+          Rates: Simli ${PRICING.simliPerMinute}/min, Anam ${PRICING.anamPerMinute}/min, LiveKit $
+          {PRICING.livekitPerMinute}/min, Deepgram ${PRICING.deepgramPerMinute}/min, web search $
+          {PRICING.webSearchPerRequest}
           /search.
         </p>
       </section>

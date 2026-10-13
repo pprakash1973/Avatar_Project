@@ -9,7 +9,8 @@ import { SessionPanel } from '@/components/app/session-panel';
 import { WelcomeView } from '@/components/app/welcome-view';
 import { useAgentChannels } from '@/hooks/useAgentChannels';
 import { toastAlert } from '@/hooks/useAgentErrors';
-import type { LanguageCode } from '@/lib/agent-channels';
+import type { LanguageCode, StyleCode } from '@/lib/agent-channels';
+import { saveAdapt, saveStyle } from '@/lib/visitor';
 
 const MotionWelcomeView = motion.create(WelcomeView);
 const MotionSessionView = motion.create(AgentSessionView_01);
@@ -38,6 +39,10 @@ interface ViewControllerProps {
   onUserNameChange: (name: string) => void;
   language: LanguageCode;
   onLanguageChange: (language: LanguageCode) => void;
+  style: StyleCode;
+  onStyleChange: (style: StyleCode) => void;
+  adaptToMood: boolean;
+  onAdaptToMoodChange: (adapt: boolean) => void;
 }
 
 export function ViewController({
@@ -46,6 +51,10 @@ export function ViewController({
   onUserNameChange,
   language,
   onLanguageChange,
+  style,
+  onStyleChange,
+  adaptToMood,
+  onAdaptToMoodChange,
 }: ViewControllerProps) {
   const { isConnected, connectionState, start } = useSessionContext();
   const agent = useAgent();
@@ -55,7 +64,15 @@ export function ViewController({
   // Keep the welcome screen (with its spinner) up until the avatar's video arrives.
   const isAvatarReady = isConnected && avatarVideoTrack !== undefined;
   const isStarting = connectionState !== ConnectionState.Disconnected && !isAvatarReady;
-  const { cards, dismissCard } = useAgentChannels();
+  const { cards, dismissCard } = useAgentChannels({
+    // Keep the start screen in sync when the user changes style by voice.
+    onStyleChange: (newStyle, adapt) => {
+      saveStyle(newStyle);
+      saveAdapt(adapt);
+      onStyleChange(newStyle);
+      onAdaptToMoodChange(adapt);
+    },
+  });
 
   const handleStartCall = async () => {
     try {
