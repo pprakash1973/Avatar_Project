@@ -45,13 +45,16 @@ export function useAgentErrors() {
             )}
             {reasons.length === 1 && <p className="w-full">{reasons[0]}</p>}
             <p className="w-full">
+              The avatar couldn&apos;t connect. Office networks, VPNs and security software often
+              block real-time audio and video. Try another network (for example a phone hotspot) or
+              run the{' '}
               <a
                 target="_blank"
                 rel="noopener noreferrer"
-                href="https://docs.livekit.io/agents/start/voice-ai/"
+                href="https://livekit.io/connection-test"
                 className="whitespace-nowrap underline"
               >
-                See quickstart guide
+                connection test
               </a>
               .
             </p>

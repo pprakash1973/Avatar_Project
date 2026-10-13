@@ -194,7 +194,6 @@ export const WelcomeView = ({
                 Adapt to my mood (shorter when I&apos;m in a hurry, step by step when I&apos;m
                 stuck)
               </label>
-              <MicrophoneSelect disabled={isStarting} />
             </fieldset>
 
             <Button
@@ -213,6 +212,13 @@ export const WelcomeView = ({
                 startButtonText
               )}
             </Button>
+
+            <div className="mt-6 flex flex-col items-center gap-2 border-t pt-4">
+              <p className="text-muted-foreground text-xs font-medium">
+                Check your audio (optional)
+              </p>
+              <MicrophoneSelect disabled={isStarting} />
+            </div>
           </>
         )}
       </section>
