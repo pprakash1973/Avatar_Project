@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CircleNotchIcon } from '@phosphor-icons/react/dist/ssr';
+import { MicrophoneSelect } from '@/components/app/microphone-select';
 import { Button } from '@/components/ui/button';
 import { LANGUAGES, type LanguageCode, STYLES, type StyleCode } from '@/lib/agent-channels';
 import { cn } from '@/lib/shadcn/utils';
@@ -193,6 +194,7 @@ export const WelcomeView = ({
                 Adapt to my mood (shorter when I&apos;m in a hurry, step by step when I&apos;m
                 stuck)
               </label>
+              <MicrophoneSelect disabled={isStarting} />
             </fieldset>
 
             <Button
