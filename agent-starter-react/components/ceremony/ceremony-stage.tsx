@@ -77,6 +77,9 @@ function useScreenWakeLock() {
   }, []);
 }
 
+// Positions for Tina's small window while a slide is shown (cycled with C).
+const CORNERS = ['right-3 bottom-3', 'right-3 top-3', 'left-3 top-12', 'left-3 bottom-16'];
+
 // How long the announcement slide stays up before Tina returns to the middle.
 const SLIDE_HOLD_MS = 2 * 60 * 1000;
 
@@ -102,6 +105,8 @@ export function CeremonyStage({ deck, awards, onReconnect, onEnd }: CeremonyStag
   // 'tina': Tina large in the middle (default, and during breaks).
   // 'slide': the slide fills the screen and Tina moves to the corner.
   const [view, setView] = useState<'tina' | 'slide'>('tina');
+  // Corner for Tina's small window over slides; C moves it if it covers a face or text.
+  const [corner, setCorner] = useState(0);
   const [slideShownAt, setSlideShownAt] = useState(0);
   const awardsRef = useRef(awards);
   awardsRef.current = awards;
@@ -186,6 +191,8 @@ export function CeremonyStage({ deck, awards, onReconnect, onEnd }: CeremonyStag
         showSlide(1);
       } else if (e.key.toLowerCase() === 's') {
         showSlide();
+      } else if (e.key.toLowerCase() === 'c') {
+        setCorner((c) => (c + 1) % CORNERS.length);
       } else if (e.key.toLowerCase() === 't') {
         setView('tina');
       } else if (e.key.toLowerCase() === 'f') {
@@ -216,8 +223,8 @@ export function CeremonyStage({ deck, awards, onReconnect, onEnd }: CeremonyStag
         <div
           className={
             view === 'slide'
-              ? 'absolute right-4 bottom-4 w-[22vw] min-w-48 overflow-hidden rounded-xl shadow-2xl ring-1 ring-white/20 transition-all duration-500'
-              : 'absolute top-1/2 left-1/2 aspect-square h-[82vh] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl shadow-2xl ring-1 ring-white/20 transition-all duration-500'
+              ? `absolute ${CORNERS[corner]} w-[13vw] min-w-28 overflow-hidden rounded-lg shadow-2xl ring-1 ring-white/20 transition-all duration-500`
+              : 'absolute top-1/2 left-1/2 aspect-square h-[72vh] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl shadow-2xl ring-1 ring-white/20 transition-all duration-500'
           }
         >
           <VideoTrack trackRef={videoTrack} className="aspect-square size-full object-cover" />
@@ -252,6 +259,13 @@ export function CeremonyStage({ deck, awards, onReconnect, onEnd }: CeremonyStag
           onClick={() => (view === 'slide' ? setView('tina') : showSlide())}
         >
           {view === 'slide' ? 'Show Tina (T)' : 'Show slide (S)'}
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => setCorner((c) => (c + 1) % CORNERS.length)}
+          disabled={view !== 'slide'}
+        >
+          Move Tina (C)
         </Button>
         <Button
           size="icon"
