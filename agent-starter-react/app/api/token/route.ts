@@ -107,6 +107,11 @@ export async function POST(req: Request) {
       style: STYLE_CODES.has(requested.style) ? requested.style : 'friendly',
       adapt: requested.adapt === '0' ? '0' : '1',
     };
+    // Ceremony mode (from /ceremony): Tina only answers when called by name.
+    if (requested.mode === 'ceremony') {
+      attributes.mode = 'ceremony';
+      attributes.wake = '1';
+    }
     if (typeof requested.visitor_id === 'string' && VISITOR_ID_RE.test(requested.visitor_id)) {
       attributes.visitor_id = requested.visitor_id;
     }

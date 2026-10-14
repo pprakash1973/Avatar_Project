@@ -12,8 +12,8 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "hello_anonymous": "Hi!",
         "welcome_back": "Welcome back, {name}!",
         "intro": (
-            "I am your personal assistant, I can search the web for you and give "
-            "results. What would you like me to do?"
+            "I am Tina, your personal assistant. I can search the web for you and "
+            "give results. What would you like me to do?"
         ),
         "reading_file": "Got your file, give me a moment to read it.",
         "checking": "Let me check that.",
@@ -24,8 +24,8 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "hello_anonymous": "नमस्ते!",
         "welcome_back": "फिर से स्वागत है, {name}!",
         "intro": (
-            "मैं आपकी पर्सनल असिस्टेंट हूँ। मैं आपके लिए वेब पर खोज करके नतीजे बता "
-            "सकती हूँ। बताइए, मैं आपके लिए क्या करूँ?"
+            "मैं टीना हूँ, आपकी पर्सनल असिस्टेंट। मैं आपके लिए वेब पर खोज करके नतीजे "
+            "बता सकती हूँ। बताइए, मैं आपके लिए क्या करूँ?"
         ),
         "reading_file": "आपकी फ़ाइल मिल गई, मुझे इसे पढ़ने के लिए एक पल दीजिए।",
         "checking": "एक पल, मैं अभी देखती हूँ।",
@@ -36,7 +36,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "hello_anonymous": "வணக்கம்!",
         "welcome_back": "மீண்டும் வருக, {name}!",
         "intro": (
-            "நான் உங்கள் தனிப்பட்ட உதவியாளர். நான் உங்களுக்காக இணையத்தில் தேடி "
+            "நான் டீனா, உங்கள் தனிப்பட்ட உதவியாளர். நான் உங்களுக்காக இணையத்தில் தேடி "
             "முடிவுகளைத் தர முடியும். நான் உங்களுக்கு என்ன செய்ய வேண்டும்?"
         ),
         "reading_file": "உங்கள் கோப்பு கிடைத்தது, அதைப் படிக்க ஒரு நிமிடம் கொடுங்கள்.",
@@ -48,7 +48,7 @@ LANGUAGES: dict[str, dict[str, str]] = {
         "hello_anonymous": "നമസ്കാരം!",
         "welcome_back": "വീണ്ടും സ്വാഗതം, {name}!",
         "intro": (
-            "ഞാൻ നിങ്ങളുടെ സ്വകാര്യ സഹായിയാണ്. നിങ്ങൾക്കായി ഇന്റർനെറ്റിൽ തിരഞ്ഞ് "
+            "ഞാൻ ടീന, നിങ്ങളുടെ സ്വകാര്യ സഹായി. നിങ്ങൾക്കായി ഇന്റർനെറ്റിൽ തിരഞ്ഞ് "
             "വിവരങ്ങൾ നൽകാൻ എനിക്ക് കഴിയും. ഞാൻ നിങ്ങൾക്കായി എന്താണ് ചെയ്യേണ്ടത്?"
         ),
         "reading_file": "നിങ്ങളുടെ ഫയൽ കിട്ടി, അത് വായിക്കാൻ ഒരു നിമിഷം തരൂ.",
@@ -89,7 +89,7 @@ def build_greeting(
 
 _BASE_INSTRUCTIONS = textwrap.dedent(
     """\
-    You are a reliable voice assistant that answers questions, explains topics, and completes tasks with available tools.
+    Your name is Tina. You are a reliable voice assistant that answers questions, explains topics, and completes tasks with available tools.
 
     # Output rules
 

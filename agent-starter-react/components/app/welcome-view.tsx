@@ -6,6 +6,11 @@ import { LANGUAGES, type LanguageCode, STYLES, type StyleCode } from '@/lib/agen
 import { cn } from '@/lib/shadcn/utils';
 import { getSavedName, saveAdapt, saveLanguage, saveName, saveStyle } from '@/lib/visitor';
 
+const MODES = [
+  { code: 'assistant', label: 'Assistant' },
+  { code: 'ceremony', label: 'Award ceremony' },
+] as const;
+
 interface ChoiceGroupProps<T extends string> {
   legend: string;
   options: readonly { code: T; label: string }[];
@@ -172,6 +177,17 @@ export const WelcomeView = ({
               disabled={isStarting}
             >
               <legend className="sr-only">Call settings</legend>
+              <ChoiceGroup
+                legend="Mode"
+                options={MODES}
+                value="assistant"
+                onChange={(mode) => {
+                  // Ceremony mode has its own password-protected setup page.
+                  if (mode === 'ceremony') {
+                    window.location.href = '/ceremony';
+                  }
+                }}
+              />
               <ChoiceGroup
                 legend="Language"
                 options={LANGUAGES}

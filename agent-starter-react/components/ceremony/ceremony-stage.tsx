@@ -1,0 +1,293 @@
+'use client';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  VideoTrack,
+  useAgent,
+  useSessionContext,
+  useVoiceAssistant,
+} from '@livekit/components-react';
+import {
+  ArrowsOutIcon,
+  CaretLeftIcon,
+  CaretRightIcon,
+  CircleNotchIcon,
+  StopIcon,
+} from '@phosphor-icons/react/dist/ssr';
+import { Button } from '@/components/ui/button';
+import { toastAlert } from '@/hooks/useAgentErrors';
+import { UI_STATUS_TOPIC } from '@/lib/agent-channels';
+import { type Award, CEREMONY_AWARDS_TOPIC } from '@/lib/ceremony';
+import { type PDFDocumentProxy, renderPage } from '@/lib/pdf';
+
+function SlideCanvas({ deck, slide }: { deck: PDFDocumentProxy; slide: number }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    if (!container || !canvas) {
+      return;
+    }
+    let cancelled = false;
+    const draw = () => {
+      if (!cancelled) {
+        void renderPage(deck, slide, canvas, container.clientWidth, container.clientHeight);
+      }
+    };
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(container);
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
+  }, [deck, slide]);
+
+  return (
+    <div ref={containerRef} className="flex size-full items-center justify-center">
+      <canvas ref={canvasRef} aria-label={`Slide ${slide}`} />
+    </div>
+  );
+}
+
+/** Keeps the laptop screen on for the whole ceremony. */
+function useScreenWakeLock() {
+  useEffect(() => {
+    let lock: WakeLockSentinel | null = null;
+    const acquire = async () => {
+      try {
+        lock = (await navigator.wakeLock?.request('screen')) ?? null;
+      } catch {
+        // Not supported or denied; the OS power settings then apply.
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void acquire();
+      }
+    };
+    void acquire();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      void lock?.release();
+    };
+  }, []);
+}
+
+// How long the announcement slide stays up before Tina returns to the middle.
+const SLIDE_HOLD_MS = 2 * 60 * 1000;
+
+const STATE_LABELS: Record<string, string> = {
+  listening: 'Listening for “Tina”',
+  thinking: 'Tina is thinking…',
+  speaking: 'Tina is speaking',
+};
+
+interface CeremonyStageProps {
+  deck: PDFDocumentProxy;
+  awards: Award[];
+  onReconnect: () => void;
+  onEnd: () => void;
+}
+
+export function CeremonyStage({ deck, awards, onReconnect, onEnd }: CeremonyStageProps) {
+  const { room, isConnected, connectionState } = useSessionContext();
+  const agent = useAgent();
+  const { videoTrack } = useVoiceAssistant();
+  const [slide, setSlide] = useState(1);
+  const [isLive, setIsLive] = useState(false);
+  // 'tina': Tina large in the middle (default, and during breaks).
+  // 'slide': the slide fills the screen and Tina moves to the corner.
+  const [view, setView] = useState<'tina' | 'slide'>('tina');
+  const [slideShownAt, setSlideShownAt] = useState(0);
+  const awardsRef = useRef(awards);
+  awardsRef.current = awards;
+
+  useScreenWakeLock();
+
+  const goTo = useCallback(
+    (n: number) => setSlide(Math.min(Math.max(1, n), deck.numPages)),
+    [deck.numPages]
+  );
+
+  const showSlide = useCallback(
+    (n?: number) => {
+      if (n !== undefined) {
+        goTo(n);
+      }
+      setView('slide');
+      setSlideShownAt(Date.now());
+    },
+    [goTo]
+  );
+
+  // After an announcement, keep the slide up for the winner's walk-up and photos,
+  // then bring Tina back to the middle of the screen for the break.
+  useEffect(() => {
+    if (view !== 'slide' || !slideShownAt) {
+      return;
+    }
+    const timer = setTimeout(() => setView('tina'), SLIDE_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [view, slideShownAt]);
+
+  // Tina asks for the award list when she's ready, and tells us which slide to show.
+  useEffect(() => {
+    room.registerTextStreamHandler(UI_STATUS_TOPIC, async (reader) => {
+      try {
+        const status = JSON.parse(await reader.readAll());
+        if (status.type === 'ceremony_ready') {
+          await room.localParticipant.sendText(JSON.stringify(awardsRef.current), {
+            topic: CEREMONY_AWARDS_TOPIC,
+          });
+        } else if (status.type === 'ceremony_live') {
+          setIsLive(true);
+        } else if (status.type === 'slide') {
+          showSlide(Number(status.slide) || 1);
+        } else if (status.type === 'view') {
+          if (status.view === 'tina') {
+            setView('tina');
+          } else {
+            showSlide();
+          }
+        } else if (status.type === 'busy') {
+          toastAlert({
+            title: 'The avatar is busy or unavailable',
+            description: 'Check the Simli plan minutes, then reconnect Tina.',
+          });
+        }
+      } catch (error) {
+        console.error('invalid status from Tina', error);
+      }
+    });
+    return () => room.unregisterTextStreamHandler(UI_STATUS_TOPIC);
+  }, [room, showSlide]);
+
+  useEffect(() => {
+    if (!isConnected) {
+      setIsLive(false);
+    }
+  }, [isConnected]);
+
+  // Operator keyboard controls: ← → to change slides, Home for the first slide, F for full screen.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+        showSlide(slide + 1);
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        showSlide(slide - 1);
+      } else if (e.key === 'Home') {
+        showSlide(1);
+      } else if (e.key.toLowerCase() === 's') {
+        showSlide();
+      } else if (e.key.toLowerCase() === 't') {
+        setView('tina');
+      } else if (e.key.toLowerCase() === 'f') {
+        void (document.fullscreenElement
+          ? document.exitFullscreen()
+          : document.documentElement.requestFullscreen());
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [slide, showSlide]);
+
+  const statusText = !isConnected
+    ? connectionState === 'disconnected'
+      ? 'Disconnected'
+      : 'Connecting…'
+    : !isLive
+      ? 'Tina is getting ready…'
+      : (STATE_LABELS[agent.state] ?? 'Tina is ready');
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black">
+      <div className={view === 'slide' ? 'size-full' : 'hidden'}>
+        <SlideCanvas deck={deck} slide={slide} />
+      </div>
+
+      {videoTrack && (
+        <div
+          className={
+            view === 'slide'
+              ? 'absolute right-4 bottom-4 w-[22vw] min-w-48 overflow-hidden rounded-xl shadow-2xl ring-1 ring-white/20 transition-all duration-500'
+              : 'absolute top-1/2 left-1/2 aspect-square h-[82vh] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl shadow-2xl ring-1 ring-white/20 transition-all duration-500'
+          }
+        >
+          <VideoTrack trackRef={videoTrack} className="aspect-square size-full object-cover" />
+        </div>
+      )}
+
+      <div className="absolute top-3 left-3 rounded-full bg-black/60 px-3 py-1 text-xs text-white/90">
+        {statusText} ·{' '}
+        {view === 'slide' ? `Slide ${slide}/${deck.numPages}` : 'Tina view (S: slide)'}
+      </div>
+
+      {/* Operator controls: faint until hovered, so they don't distract the audience. */}
+      <div className="absolute bottom-4 left-4 flex gap-2 opacity-20 transition-opacity focus-within:opacity-100 hover:opacity-100">
+        <Button
+          size="icon"
+          variant="secondary"
+          aria-label="Previous slide"
+          onClick={() => goTo(slide - 1)}
+        >
+          <CaretLeftIcon />
+        </Button>
+        <Button
+          size="icon"
+          variant="secondary"
+          aria-label="Next slide"
+          onClick={() => goTo(slide + 1)}
+        >
+          <CaretRightIcon />
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => (view === 'slide' ? setView('tina') : showSlide())}
+        >
+          {view === 'slide' ? 'Show Tina (T)' : 'Show slide (S)'}
+        </Button>
+        <Button
+          size="icon"
+          variant="secondary"
+          aria-label="Full screen"
+          onClick={() => void document.documentElement.requestFullscreen()}
+        >
+          <ArrowsOutIcon />
+        </Button>
+        <Button variant="destructive" onClick={onEnd}>
+          <StopIcon /> End ceremony
+        </Button>
+      </div>
+
+      {connectionState === 'disconnected' && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/70">
+          <div className="bg-background text-foreground flex flex-col items-center gap-3 rounded-xl p-6 text-center">
+            <p className="font-semibold">Tina got disconnected</p>
+            <p className="text-muted-foreground max-w-sm text-sm">
+              Reconnect to continue. Awards already announced stay on this laptop; Tina will pick up
+              the list again.
+            </p>
+            <div className="flex gap-2">
+              <Button onClick={onReconnect}>Reconnect Tina</Button>
+              <Button variant="outline" onClick={onEnd}>
+                Back to setup
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      {connectionState === 'connecting' && (
+        <div className="absolute top-3 right-3 text-white/80">
+          <CircleNotchIcon weight="bold" className="size-5 animate-spin" />
+        </div>
+      )}
+    </div>
+  );
+}

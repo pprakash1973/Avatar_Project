@@ -18,6 +18,7 @@ from livekit.agents import (
     APIStatusError,
     JobContext,
     RunContext,
+    StopResponse,
     TurnHandlingOptions,
     cli,
     function_tool,
@@ -33,6 +34,7 @@ import files
 import memory
 import store
 import travel
+from ceremony import CeremonyHost, CeremonyProgram
 from claude import HelperUsage
 from prompts import (
     DEFAULT_STYLE,
@@ -42,6 +44,7 @@ from prompts import (
     build_instructions,
 )
 from vision import VideoWatcher
+from wake_word import WakeWord
 from web_search import run_web_search
 
 logger = logging.getLogger("agent")
@@ -68,6 +71,10 @@ MAIN_MODEL = "claude-sonnet-5-5"
 FILE_UPLOAD_TOPIC = "file-upload"
 UI_CARD_TOPIC = "ui-card"
 UI_STATUS_TOPIC = "ui-status"
+CEREMONY_AWARDS_TOPIC = "ceremony-awards"
+
+# Tina's voice: Cartesia "Priya - Trusted Operator", an Indian-English female voice.
+TINA_VOICE_ID = os.environ.get("TINA_VOICE_ID", "f6141af3-5f94-418c-80ed-a45d450e7e2e")
 
 # No defaults on enum tool params: LiveKit makes defaulted params nullable, and the
 # Claude API rejects an enum typed ["string", "null"], failing every LLM request.
@@ -87,7 +94,9 @@ def make_stt(language: str) -> stt.STT:
 def make_tts(language: str) -> tts.TTS:
     # Malayalam voices need Sonic 3.6; the other languages stay on the tested sonic-3.
     return cartesia.TTS(
-        model="sonic-3.6" if language == "ml" else "sonic-3", language=language
+        model="sonic-3.6" if language == "ml" else "sonic-3",
+        language=language,
+        voice=TINA_VOICE_ID,
     )
 
 
@@ -102,7 +111,9 @@ def avatar_provider() -> str:
     return "simli" if os.environ.get("SIMLI_API_KEY") else "anam"
 
 
-async def start_avatar(provider: str, session: AgentSession, ctx: JobContext) -> bool:
+async def start_avatar(
+    provider: str, session: AgentSession, ctx: JobContext, *, long_event: bool = False
+) -> bool:
     """Starts the avatar and waits for it to join; False if it isn't available."""
     if provider == "simli":
         avatar = simli.AvatarSession(
@@ -110,9 +121,10 @@ async def start_avatar(provider: str, session: AgentSession, ctx: JobContext) ->
                 api_key=os.environ["SIMLI_API_KEY"],
                 face_id=os.environ["SIMLI_FACE_ID"],
                 # Cap call length to protect the plan's minutes, and don't drop
-                # the avatar while the user is quietly reading a card.
-                max_session_length=15 * 60,
-                max_idle_time=3 * 60,
+                # the avatar while the user is quietly reading a card. A ceremony
+                # runs 30-45 minutes with breaks of a few minutes between awards.
+                max_session_length=(75 if long_event else 15) * 60,
+                max_idle_time=(10 if long_event else 3) * 60,
             ),
         )
     else:
@@ -159,7 +171,9 @@ class Assistant(Agent):
         memory_note: str = "",
         style: str = DEFAULT_STYLE,
         adapt_to_mood: bool = True,
+        wake: WakeWord | None = None,
     ) -> None:
+        self._wake = wake or WakeWord(enabled=False)
         self._room = room
         self._usage = usage
         self._video = video
@@ -189,6 +203,9 @@ class Assistant(Agent):
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
     ) -> None:
+        # With "only respond when called Tina" on, ignore turns not addressed to her.
+        if not self._wake.accepts(new_message.text_content or ""):
+            raise StopResponse()
         # While the user shares their screen or camera, let the model see it.
         latest = self._video.latest()
         if latest is not None:
@@ -507,6 +524,77 @@ def _usage_totals(session: AgentSession) -> dict[str, float]:
     return totals
 
 
+async def run_ceremony(
+    ctx: JobContext,
+    session: AgentSession,
+    wake: WakeWord,
+    record: dict[str, Any],
+    started_at: float,
+) -> None:
+    """Award ceremony: get the approved awards from the browser, then host."""
+    loop = asyncio.get_running_loop()
+    program_future: asyncio.Future[CeremonyProgram] = loop.create_future()
+    tasks: set[asyncio.Task] = set()
+
+    async def read_awards(reader: rtc.TextStreamReader) -> None:
+        try:
+            program = CeremonyProgram.from_json(await reader.read_all())
+        except (ValueError, KeyError, TypeError) as e:
+            logger.warning("invalid ceremony awards: %s", e)
+            program = CeremonyProgram()
+        if not program_future.done():
+            program_future.set_result(program)
+
+    def on_awards(reader: rtc.TextStreamReader, participant_identity: str) -> None:
+        task = asyncio.create_task(read_awards(reader))
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    ctx.room.register_text_stream_handler(CEREMONY_AWARDS_TOPIC, on_awards)
+    # Ask the browser for the award list; it is only kept on the host laptop.
+    await send_ui(ctx.room, UI_STATUS_TOPIC, {"type": "ceremony_ready"})
+    try:
+        program = await asyncio.wait_for(program_future, 30)
+    except TimeoutError:
+        logger.warning("no ceremony awards received")
+        program = CeremonyProgram()
+    logger.info("ceremony with %d awards", len(program.awards))
+
+    async def send_slide(slide: int) -> None:
+        await send_ui(ctx.room, UI_STATUS_TOPIC, {"type": "slide", "slide": slide})
+
+    async def send_view(view: str) -> None:
+        await send_ui(ctx.room, UI_STATUS_TOPIC, {"type": "view", "view": view})
+
+    host = CeremonyHost(
+        program=program,
+        llm_model=anthropic.LLM(model=MAIN_MODEL, parallel_tool_calls=False),
+        send_slide=send_slide,
+        send_view=send_view,
+        wake=wake,
+    )
+    await session.start(agent=host, room=ctx.room)
+    await send_ui(
+        ctx.room,
+        UI_STATUS_TOPIC,
+        {"type": "ceremony_live", "awards": len(program.awards)},
+    )
+
+    async def finish_ceremony() -> None:
+        await store.record_call(
+            {
+                **record,
+                "status": "ok",
+                "duration_s": round(time.time() - started_at, 1),
+                "awards_announced": sum(a.announced for a in program.awards),
+                "llm_model": MAIN_MODEL,
+                **_usage_totals(session),
+            }
+        )
+
+    ctx.add_shutdown_callback(finish_ceremony)
+
+
 server = AgentServer()
 
 
@@ -539,6 +627,11 @@ async def entrypoint(ctx: JobContext) -> None:
     visitor_id = attributes.get("visitor_id", "")
     if not store.valid_visitor_id(visitor_id):
         visitor_id = ""
+    is_ceremony = attributes.get("mode") == "ceremony"
+    if is_ceremony:
+        language = "en"
+    # In a ceremony Tina must ignore the hall unless called; elsewhere it's optional.
+    wake = WakeWord(enabled=is_ceremony or attributes.get("wake") == "1")
 
     usage = HelperUsage()
     record: dict[str, Any] = {
@@ -548,6 +641,7 @@ async def entrypoint(ctx: JobContext) -> None:
         "visitor_id": visitor_id,
         "language": language,
         "style": style,
+        "mode": "ceremony" if is_ceremony else "assistant",
         "started_at": datetime.fromtimestamp(started_at, UTC).isoformat(),
     }
 
@@ -557,20 +651,31 @@ async def entrypoint(ctx: JobContext) -> None:
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),
             interruption={"mode": "adaptive"},
-            preemptive_generation={"enabled": True},
+            # With the wake word on, most turns are ignored: don't pre-generate them.
+            preemptive_generation={"enabled": not wake.enabled},
         ),
     )
+
+    # Keep the follow-up window open while Tina talks and just after she finishes.
+    @session.on("agent_state_changed")
+    def _on_agent_state(ev) -> None:
+        if "speaking" in (ev.old_state, ev.new_state):
+            wake.extend()
 
     # The avatar was started after ctx.connect() above: it needs a connected room
     # to join, otherwise it hangs and can time out the whole session.
     provider = avatar_provider()
     record["avatar_provider"] = provider
-    if not await start_avatar(provider, session, ctx):
+    if not await start_avatar(provider, session, ctx, long_event=is_ceremony):
         # Usually the provider's plan limit (concurrent sessions or free minutes):
         # tell the browser and end this call instead of leaving it spinning.
         await send_ui(ctx.room, UI_STATUS_TOPIC, {"type": "busy"})
         await store.record_call({**record, "status": "busy", "duration_s": 0})
         ctx.shutdown("avatar unavailable")
+        return
+
+    if is_ceremony:
+        await run_ceremony(ctx, session, wake, record, started_at)
         return
 
     video = VideoWatcher(ctx.room)
@@ -586,6 +691,7 @@ async def entrypoint(ctx: JobContext) -> None:
         memory_note=memory_note,
         style=style,
         adapt_to_mood=adapt_to_mood,
+        wake=wake,
     )
     await session.start(agent=assistant, room=ctx.room)
 
