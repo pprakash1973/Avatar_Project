@@ -15,8 +15,8 @@ export const PRICING = {
   deepgramPerMinute: 0.0077,
   // Cartesia Sonic-3 TTS, $ per character (Pro plan overage)
   cartesiaPerChar: 0.000065,
-  // Avatar, $ per minute: Simli pay-as-you-go, Anam Starter plan overage
-  simliPerMinute: 0.05,
+  // Avatar, $ per minute: Simli Pro ($10 for 1,000 minutes), Anam Starter plan overage
+  simliPerMinute: 0.01,
   anamPerMinute: 0.16,
   // LiveKit Cloud agent session, $ per minute
   livekitPerMinute: 0.01,
