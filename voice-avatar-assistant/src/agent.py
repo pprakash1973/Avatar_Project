@@ -584,7 +584,8 @@ async def run_ceremony(
     )
     await session.start(agent=host, room=ctx.room)
     # Greet the room as soon as Tina is on screen; the hall can't interrupt it.
-    session.say(program.settings.greeting, allow_interruptions=False)
+    greeting = program.settings.greeting_for(record.get("name", ""))
+    session.say(program.settings.spoken(greeting), allow_interruptions=False)
     wake.extend()
     await send_ui(
         ctx.room,

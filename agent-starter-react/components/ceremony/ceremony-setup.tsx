@@ -1,7 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CircleNotchIcon, PlusIcon, TrashIcon } from '@phosphor-icons/react/dist/ssr';
+import {
+  CircleNotchIcon,
+  PlayIcon,
+  PlusIcon,
+  SpeakerHighIcon,
+  TrashIcon,
+} from '@phosphor-icons/react/dist/ssr';
 import { MicrophoneSelect } from '@/components/app/microphone-select';
 import { VoiceSelect } from '@/components/app/voice-select';
 import { Button } from '@/components/ui/button';
@@ -11,14 +17,18 @@ import {
   type CeremonySettings,
   type ExtractedAward,
   defaultScript,
+  greetingFor,
   loadAwards,
   loadDeck,
   saveAwards,
   saveDeck,
   saveSettings,
+  spokenText,
 } from '@/lib/ceremony';
 import { type PDFDocumentProxy, openPdf, pageImage, pageText } from '@/lib/pdf';
-import { saveVoice } from '@/lib/visitor';
+import { getSavedSpeakerId, saveName, saveVoice } from '@/lib/visitor';
+
+type SinkableAudio = HTMLAudioElement & { setSinkId?: (sinkId: string) => Promise<void> };
 
 // Slides with less text than this are sent as an image so names in pictures are read too.
 const MIN_TEXT_CHARS = 40;
@@ -35,6 +45,8 @@ interface CeremonySetupProps {
   onAwardsChange: (awards: Award[]) => void;
   voice: VoiceCode;
   onVoiceChange: (voice: VoiceCode) => void;
+  hostName: string;
+  onHostNameChange: (name: string) => void;
   settings: CeremonySettings;
   onSettingsChange: (settings: CeremonySettings) => void;
   onStart: () => void;
@@ -48,6 +60,8 @@ export function CeremonySetup({
   onAwardsChange,
   voice,
   onVoiceChange,
+  hostName,
+  onHostNameChange,
   settings,
   onSettingsChange,
   onStart,
@@ -58,6 +72,44 @@ export function CeremonySetup({
     onSettingsChange(next);
     saveSettings(next);
   };
+
+  // Plays text in Tina's voice (with the pronunciation list applied) on the chosen speaker.
+  const [speaking, setSpeaking] = useState<string | null>(null);
+  const hear = async (key: string, text: string) => {
+    setSpeaking(key);
+    setError('');
+    try {
+      const response = await fetch('/api/ceremony/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: spokenText(text, settings.pronunciations), voice }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const audio: SinkableAudio = new Audio(url);
+      const speakerId = getSavedSpeakerId();
+      if (speakerId && audio.setSinkId) {
+        await audio.setSinkId(speakerId).catch(() => {});
+      }
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        setSpeaking(null);
+      };
+      await audio.play();
+    } catch (e) {
+      setError(`Could not play the preview: ${e instanceof Error ? e.message : String(e)}`);
+      setSpeaking(null);
+    }
+  };
+
+  const setPronunciation = (index: number, key: 'written' | 'spoken', value: string) =>
+    updateSettings({
+      pronunciations: settings.pronunciations.map((p, i) =>
+        i === index ? { ...p, [key]: value } : p
+      ),
+    });
 
   const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [status, setStatus] = useState('');
@@ -268,6 +320,19 @@ export function CeremonySetup({
                     onChange={(e) => setField(index, 'slide', Number(e.target.value) || 1)}
                   />
                 </label>
+                <button
+                  type="button"
+                  onClick={() => void hear(`award-${index}`, award.script)}
+                  disabled={!award.script || speaking !== null}
+                  className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs md:col-span-3"
+                >
+                  {speaking === `award-${index}` ? (
+                    <CircleNotchIcon className="size-3.5 animate-spin" />
+                  ) : (
+                    <SpeakerHighIcon className="size-3.5" />
+                  )}
+                  Hear how Tina will say it
+                </button>
                 <label className="text-muted-foreground text-xs md:col-span-3">
                   Announcement text (read word-for-word)
                   <textarea
@@ -311,7 +376,19 @@ export function CeremonySetup({
             disabled={isStarting}
           />
           <label className="text-muted-foreground text-xs">
-            Opening greeting (Tina says this as soon as she appears)
+            Host name (Tina greets the host by name when she appears)
+            <input
+              className={inputClassName}
+              value={hostName}
+              placeholder="e.g. Prakash"
+              onChange={(e) => {
+                onHostNameChange(e.target.value);
+                saveName(e.target.value);
+              }}
+            />
+          </label>
+          <label className="text-muted-foreground text-xs">
+            Opening greeting ({'{name}'} is replaced by the host name)
             <textarea
               rows={2}
               className={inputClassName}
@@ -319,6 +396,42 @@ export function CeremonySetup({
               onChange={(e) => updateSettings({ greeting: e.target.value })}
             />
           </label>
+          <button
+            type="button"
+            onClick={() => void hear('greeting', greetingFor(settings.greeting, hostName))}
+            disabled={!settings.greeting || speaking !== null}
+            className="text-muted-foreground hover:text-foreground -mt-2 flex items-center gap-1 self-start text-xs"
+          >
+            {speaking === 'greeting' ? (
+              <CircleNotchIcon className="size-3.5 animate-spin" />
+            ) : (
+              <SpeakerHighIcon className="size-3.5" />
+            )}
+            Hear the greeting
+          </button>
+          <label className="text-muted-foreground text-xs">
+            Welcome note (read word-for-word when the host says, e.g., &ldquo;Tina, please give the
+            welcome note&rdquo;)
+            <textarea
+              rows={4}
+              className={inputClassName}
+              value={settings.welcome_note}
+              onChange={(e) => updateSettings({ welcome_note: e.target.value })}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => void hear('welcome', settings.welcome_note)}
+            disabled={!settings.welcome_note || speaking !== null}
+            className="text-muted-foreground hover:text-foreground -mt-2 flex items-center gap-1 self-start text-xs"
+          >
+            {speaking === 'welcome' ? (
+              <CircleNotchIcon className="size-3.5 animate-spin" />
+            ) : (
+              <SpeakerHighIcon className="size-3.5" />
+            )}
+            Hear the welcome note
+          </button>
           <fieldset className="text-sm">
             <legend className="text-muted-foreground mb-1 text-xs">
               When a category has several winners
@@ -359,7 +472,74 @@ export function CeremonySetup({
       </section>
 
       <section className="mt-4 rounded-xl border p-4">
-        <h2 className="text-sm font-semibold">4. Hall audio</h2>
+        <h2 className="text-sm font-semibold">4. Name pronunciations</h2>
+        <p className="text-muted-foreground mt-1 text-xs">
+          Wherever a name below appears in an announcement or the greeting, Tina says it the way you
+          write it on the right. Slides keep the real spelling. Use hyphens or simple sounds, e.g.
+          Soumya → Sow-mya.
+        </p>
+        <div className="mt-3 flex flex-col gap-2">
+          {settings.pronunciations.map((p, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <input
+                aria-label="Written name"
+                placeholder="Written name"
+                className={inputClassName}
+                value={p.written}
+                onChange={(e) => setPronunciation(index, 'written', e.target.value)}
+              />
+              <span className="text-muted-foreground text-xs">→</span>
+              <input
+                aria-label="Say it as"
+                placeholder="Say it as"
+                className={inputClassName}
+                value={p.spoken}
+                onChange={(e) => setPronunciation(index, 'spoken', e.target.value)}
+              />
+              <button
+                type="button"
+                aria-label={`Hear ${p.written || 'name'}`}
+                onClick={() => void hear(`name-${index}`, p.spoken || p.written)}
+                disabled={!(p.spoken || p.written) || speaking !== null}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                {speaking === `name-${index}` ? (
+                  <CircleNotchIcon className="size-5 animate-spin" />
+                ) : (
+                  <PlayIcon weight="fill" className="size-5" />
+                )}
+              </button>
+              <button
+                type="button"
+                aria-label={`Remove ${p.written || 'pronunciation'}`}
+                onClick={() =>
+                  updateSettings({
+                    pronunciations: settings.pronunciations.filter((_, i) => i !== index),
+                  })
+                }
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <TrashIcon className="size-5" />
+              </button>
+            </div>
+          ))}
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-3"
+          onClick={() =>
+            updateSettings({
+              pronunciations: [...settings.pronunciations, { written: '', spoken: '' }],
+            })
+          }
+        >
+          <PlusIcon /> Add name
+        </Button>
+      </section>
+
+      <section className="mt-4 rounded-xl border p-4">
+        <h2 className="text-sm font-semibold">5. Hall audio</h2>
         <p className="text-muted-foreground mt-1 mb-3 text-xs">
           Pick the host microphone and the speaker / PA output, and test them.
         </p>

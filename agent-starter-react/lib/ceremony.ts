@@ -17,15 +17,42 @@ export type CeremonySettings = {
   /** With several winners in a category: ask the host first, or continue after a pause. */
   multi_winner: 'ask' | 'auto';
   pause_seconds: number;
-  /** What Tina says as soon as she joins. */
+  /** What Tina says as soon as she joins; {name} is the host's name. */
   greeting: string;
+  /** Read word-for-word when the host asks for the welcome note. */
+  welcome_note: string;
+  /** Written name -> how Tina should say it (speech only; slides keep the real spelling). */
+  pronunciations: Pronunciation[];
 };
+
+export type Pronunciation = { written: string; spoken: string };
+
+/** Text as Tina will say it: names replaced by their spoken spelling (whole words only). */
+export function spokenText(text: string, pronunciations: Pronunciation[]) {
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return [...pronunciations]
+    .filter((p) => p.written.trim() && p.spoken.trim())
+    .sort((a, b) => b.written.length - a.written.length)
+    .reduce(
+      (out, p) =>
+        out.replace(new RegExp(`\\b${escape(p.written.trim())}\\b`, 'gi'), p.spoken.trim()),
+      text
+    );
+}
 
 export const DEFAULT_SETTINGS: CeremonySettings = {
   multi_winner: 'ask',
   pause_seconds: 8,
-  greeting:
-    "Hello everyone! I'm Tina, and I'm delighted to be your co-host today. Whenever you're ready, just call my name.",
+  greeting: 'Hi {name}, good day! I am happy to be your co-host.',
+  welcome_note:
+    'Good evening, esteemed UST leaders and dear colleagues. A warm welcome to the PACS Annual ' +
+    'Rewards and Recognition Ceremony. We sincerely thank our leaders for taking time out of their ' +
+    'busy schedules to join us. Your presence and continued support make this occasion truly ' +
+    'special. Let us celebrate excellence and achievement together!',
+  pronunciations: [
+    { written: 'Soumya', spoken: 'Sow-mya' },
+    { written: 'Kalpalatha', spoken: 'Kalpa-latha' },
+  ],
 };
 
 export type ExtractedAward = {
@@ -44,11 +71,21 @@ export const defaultScript = (a: ExtractedAward) =>
 
 const AWARDS_KEY = 'avatar.ceremony.awards';
 const SETTINGS_KEY = 'avatar.ceremony.settings';
+const OLD_DEFAULT_GREETING =
+  "Hello everyone! I'm Tina, and I'm delighted to be your co-host today. Whenever you're ready, just call my name.";
+
+export const greetingFor = (greeting: string, hostName: string) =>
+  greeting.replaceAll('{name}', hostName.trim() || 'everyone');
 
 export function loadSettings(): CeremonySettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
-    return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS;
+    const saved = raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS;
+    // Earlier versions saved a greeting without the host's name; use the new default.
+    if (saved.greeting === OLD_DEFAULT_GREETING) {
+      saved.greeting = DEFAULT_SETTINGS.greeting;
+    }
+    return saved;
   } catch {
     return DEFAULT_SETTINGS;
   }

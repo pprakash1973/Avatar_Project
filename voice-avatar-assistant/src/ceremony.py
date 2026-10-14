@@ -28,9 +28,13 @@ from wake_word import WakeWord
 
 logger = logging.getLogger("agent.ceremony")
 
-DEFAULT_GREETING = (
-    "Hello everyone! I'm Tina, and I'm delighted to be your co-host today. "
-    "Whenever you're ready, just call my name."
+# {name} is replaced by the host's name.
+DEFAULT_GREETING = "Hi {name}, good day! I am happy to be your co-host."
+DEFAULT_WELCOME_NOTE = (
+    "Good evening, esteemed UST leaders and dear colleagues. A warm welcome to the PACS "
+    "Annual Rewards and Recognition Ceremony. We sincerely thank our leaders for taking "
+    "time out of their busy schedules to join us. Your presence and continued support "
+    "make this occasion truly special. Let us celebrate excellence and achievement together!"
 )
 
 
@@ -50,6 +54,20 @@ class CeremonySettings:
     multi_winner: Literal["ask", "auto"] = "ask"
     pause_seconds: float = 8.0
     greeting: str = DEFAULT_GREETING
+    welcome_note: str = DEFAULT_WELCOME_NOTE
+    # Written name -> how Tina should say it, e.g. "Soumya" -> "Sow-mya".
+    pronunciations: dict[str, str] = field(default_factory=dict)
+
+    def greeting_for(self, host_name: str) -> str:
+        return self.greeting.replace("{name}", host_name or "everyone")
+
+    def spoken(self, text: str) -> str:
+        """Text as Tina should say it: names replaced by their spoken spelling."""
+        for written, said in sorted(
+            self.pronunciations.items(), key=lambda kv: -len(kv[0])
+        ):
+            text = re.sub(rf"\b{re.escape(written)}\b", said, text, flags=re.IGNORECASE)
+        return text
 
 
 def _norm(text: str) -> str:
@@ -73,6 +91,13 @@ class CeremonyProgram:
             multi_winner="auto" if raw.get("multi_winner") == "auto" else "ask",
             pause_seconds=min(max(float(raw.get("pause_seconds", 8)), 2), 60),
             greeting=str(raw.get("greeting") or DEFAULT_GREETING).strip(),
+            welcome_note=str(raw.get("welcome_note") or DEFAULT_WELCOME_NOTE).strip(),
+            pronunciations={
+                str(p["written"]).strip(): str(p["spoken"]).strip()
+                for p in raw.get("pronunciations", []) or []
+                if str(p.get("written", "")).strip()
+                and str(p.get("spoken", "")).strip()
+            },
         )
         awards = [
             Award(
@@ -167,6 +192,7 @@ class CeremonyHost(Agent):
                 # How to behave on stage
 
                 - Keep anything you say yourself very short: one sentence, plain text, no lists or formatting.
+                - When the host asks you to give the welcome note, welcome address or opening speech, call say_welcome_note. It speaks the approved text word-for-word.
                 - To announce a specific award, call announce_award with its category. When the host asks for "the next award" without naming it, call announce_next_award. These speak the approved announcement and show the slide. Never announce, guess or mention a winner's name yourself: you do not know the winners.
                 - When an announce tool succeeds it returns nothing; the announcement you then see in the conversation was spoken successfully. Never apologise for it, comment on it or repeat it.
                 - Some categories have several winners. If you asked whether to announce the next winner of a category and the host agrees, call announce_award with that same category.
@@ -192,7 +218,9 @@ class CeremonyHost(Agent):
         )
         await self._send_slide(award.slide)
         # The approved text, exactly as written; applause must not cut it off.
-        handle = session.say(award.script, allow_interruptions=False)
+        handle = session.say(
+            self._program.settings.spoken(award.script), allow_interruptions=False
+        )
         award.announced = True
         return handle
 
@@ -249,6 +277,18 @@ class CeremonyHost(Agent):
             names = ", ".join(self._program.categories())
             return f"No category matches {category!r}. Categories are: {names}."
         return await self._announce(ctx, matched, repeat)
+
+    @function_tool()
+    async def say_welcome_note(self, ctx: RunContext) -> str:
+        """Give the approved welcome note to the audience, word-for-word."""
+        logger.info("welcome note")
+        await self._send_view("tina")
+        ctx.session.say(
+            self._program.settings.spoken(self._program.settings.welcome_note),
+            allow_interruptions=False,
+        )
+        # The welcome note is the whole reply.
+        raise StopResponse()
 
     @function_tool()
     async def announce_next_award(self, ctx: RunContext) -> str:

@@ -15,7 +15,12 @@ import { useCallDiagnostics } from '@/hooks/useCallDiagnostics';
 import { DEFAULT_VOICE, VOICES, type VoiceCode } from '@/lib/agent-channels';
 import { type Award, type CeremonySettings, DEFAULT_SETTINGS, loadSettings } from '@/lib/ceremony';
 import type { PDFDocumentProxy } from '@/lib/pdf';
-import { getSavedMicrophoneId, getSavedSpeakerId, getSavedVoice } from '@/lib/visitor';
+import {
+  getSavedMicrophoneId,
+  getSavedName,
+  getSavedSpeakerId,
+  getSavedVoice,
+} from '@/lib/visitor';
 
 const newRoomName = () => `voice_assistant_room_${crypto.randomUUID()}`;
 
@@ -33,18 +38,21 @@ export function CeremonyApp({ agentName }: { agentName?: string }) {
   const [roomName, setRoomName] = useState(newRoomName);
   const [voice, setVoice] = useState<VoiceCode>(DEFAULT_VOICE);
   const [settings, setSettings] = useState<CeremonySettings>(DEFAULT_SETTINGS);
+  // Tina greets the host by this name when she joins.
+  const [hostName, setHostName] = useState('');
   useEffect(() => {
     const saved = getSavedVoice();
     if (VOICES.some((v) => v.code === saved)) {
       setVoice(saved as VoiceCode);
     }
     setSettings(loadSettings());
+    setHostName(getSavedName());
   }, []);
   const participantAttributes = useMemo(() => ({ ...CEREMONY_ATTRIBUTES, voice }), [voice]);
   const session = useSession(tokenSource, {
     agentConnectTimeoutMilliseconds: 60_000,
     ...(agentName ? { agentName } : {}),
-    participantName: 'Host',
+    participantName: hostName.trim() || 'Host',
     participantAttributes,
     roomName,
   });
@@ -115,6 +123,8 @@ export function CeremonyApp({ agentName }: { agentName?: string }) {
           onAwardsChange={setAwards}
           voice={voice}
           onVoiceChange={setVoice}
+          hostName={hostName}
+          onHostNameChange={setHostName}
           settings={settings}
           onSettingsChange={setSettings}
           onStart={start}
