@@ -17,7 +17,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { toastAlert } from '@/hooks/useAgentErrors';
 import { UI_STATUS_TOPIC } from '@/lib/agent-channels';
-import { type Award, CEREMONY_AWARDS_TOPIC } from '@/lib/ceremony';
+import { type Award, CEREMONY_AWARDS_TOPIC, type CeremonySettings } from '@/lib/ceremony';
 import { type PDFDocumentProxy, renderPage } from '@/lib/pdf';
 
 function SlideCanvas({ deck, slide }: { deck: PDFDocumentProxy; slide: number }) {
@@ -92,11 +92,12 @@ const STATE_LABELS: Record<string, string> = {
 interface CeremonyStageProps {
   deck: PDFDocumentProxy;
   awards: Award[];
+  settings: CeremonySettings;
   onReconnect: () => void;
   onEnd: () => void;
 }
 
-export function CeremonyStage({ deck, awards, onReconnect, onEnd }: CeremonyStageProps) {
+export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: CeremonyStageProps) {
   const { room, isConnected, connectionState } = useSessionContext();
   const agent = useAgent();
   const { videoTrack } = useVoiceAssistant();
@@ -108,8 +109,8 @@ export function CeremonyStage({ deck, awards, onReconnect, onEnd }: CeremonyStag
   // Corner for Tina's small window over slides; C moves it if it covers a face or text.
   const [corner, setCorner] = useState(0);
   const [slideShownAt, setSlideShownAt] = useState(0);
-  const awardsRef = useRef(awards);
-  awardsRef.current = awards;
+  const programRef = useRef({ awards, settings });
+  programRef.current = { awards, settings };
 
   useScreenWakeLock();
 
@@ -145,7 +146,7 @@ export function CeremonyStage({ deck, awards, onReconnect, onEnd }: CeremonyStag
       try {
         const status = JSON.parse(await reader.readAll());
         if (status.type === 'ceremony_ready') {
-          await room.localParticipant.sendText(JSON.stringify(awardsRef.current), {
+          await room.localParticipant.sendText(JSON.stringify(programRef.current), {
             topic: CEREMONY_AWARDS_TOPIC,
           });
         } else if (status.type === 'ceremony_live') {

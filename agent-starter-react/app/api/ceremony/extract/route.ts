@@ -65,6 +65,8 @@ export async function POST(req: Request) {
       'category, the winner (person or team name exactly as written), the citation (the ' +
       'description of why they won, copied word-for-word from the slide, or an empty ' +
       'string if there is none), and the number of the slide that announces the winner. ' +
+      'If an award has several winners, list each winner as a separate entry with the same ' +
+      'category, in the order they are presented, with the slide for that winner. ' +
       'Skip title, agenda, thank-you and other non-award slides. Never invent names or text.',
   });
 

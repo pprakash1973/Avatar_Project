@@ -68,3 +68,15 @@ export const STYLES = [
 ] as const;
 
 export type StyleCode = (typeof STYLES)[number]['code'];
+
+// Tina's voices (Cartesia); keys match VOICES in voice-avatar-assistant/src/agent.py.
+export const VOICES = [
+  { code: 'priya', label: 'Priya', accent: 'Indian English' },
+  { code: 'janvi', label: 'Janvi', accent: 'Indian English' },
+  { code: 'kiara', label: 'Kiara', accent: 'Indian English' },
+  { code: 'simi', label: 'Simi', accent: 'Indian English' },
+  { code: 'katie', label: 'Katie', accent: 'American English' },
+] as const;
+
+export type VoiceCode = (typeof VOICES)[number]['code'];
+export const DEFAULT_VOICE: VoiceCode = 'priya';

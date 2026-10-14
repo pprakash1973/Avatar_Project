@@ -1,10 +1,24 @@
 import { useEffect, useState } from 'react';
 import { CircleNotchIcon } from '@phosphor-icons/react/dist/ssr';
 import { MicrophoneSelect } from '@/components/app/microphone-select';
+import { VoiceSelect } from '@/components/app/voice-select';
 import { Button } from '@/components/ui/button';
-import { LANGUAGES, type LanguageCode, STYLES, type StyleCode } from '@/lib/agent-channels';
+import {
+  LANGUAGES,
+  type LanguageCode,
+  STYLES,
+  type StyleCode,
+  type VoiceCode,
+} from '@/lib/agent-channels';
 import { cn } from '@/lib/shadcn/utils';
-import { getSavedName, saveAdapt, saveLanguage, saveName, saveStyle } from '@/lib/visitor';
+import {
+  getSavedName,
+  saveAdapt,
+  saveLanguage,
+  saveName,
+  saveStyle,
+  saveVoice,
+} from '@/lib/visitor';
 
 const MODES = [
   { code: 'assistant', label: 'Assistant' },
@@ -77,6 +91,8 @@ interface WelcomeViewProps {
   onConversationStyleChange: (style: StyleCode) => void;
   adaptToMood: boolean;
   onAdaptToMoodChange: (adapt: boolean) => void;
+  voice: VoiceCode;
+  onVoiceChange: (voice: VoiceCode) => void;
   isStarting: boolean;
 }
 
@@ -91,6 +107,8 @@ export const WelcomeView = ({
   onConversationStyleChange,
   adaptToMood,
   onAdaptToMoodChange,
+  voice,
+  onVoiceChange,
   isStarting,
   ref,
 }: React.ComponentProps<'div'> & WelcomeViewProps) => {
@@ -199,6 +217,13 @@ export const WelcomeView = ({
                 options={STYLES}
                 value={conversationStyle}
                 onChange={handleStyleChange}
+              />
+              <VoiceSelect
+                value={voice}
+                onChange={(v) => {
+                  saveVoice(v);
+                  onVoiceChange(v);
+                }}
               />
               <label className="text-muted-foreground flex items-center gap-2 text-xs">
                 <input

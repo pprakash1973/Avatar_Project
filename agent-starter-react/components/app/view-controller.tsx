@@ -9,7 +9,7 @@ import { SessionPanel } from '@/components/app/session-panel';
 import { WelcomeView } from '@/components/app/welcome-view';
 import { useAgentChannels } from '@/hooks/useAgentChannels';
 import { toastAlert } from '@/hooks/useAgentErrors';
-import type { LanguageCode, StyleCode } from '@/lib/agent-channels';
+import type { LanguageCode, StyleCode, VoiceCode } from '@/lib/agent-channels';
 import { getSavedMicrophoneId, getSavedSpeakerId, saveAdapt, saveStyle } from '@/lib/visitor';
 
 const MotionWelcomeView = motion.create(WelcomeView);
@@ -43,6 +43,8 @@ interface ViewControllerProps {
   onConversationStyleChange: (style: StyleCode) => void;
   adaptToMood: boolean;
   onAdaptToMoodChange: (adapt: boolean) => void;
+  voice: VoiceCode;
+  onVoiceChange: (voice: VoiceCode) => void;
 }
 
 export function ViewController({
@@ -55,6 +57,8 @@ export function ViewController({
   onConversationStyleChange,
   adaptToMood,
   onAdaptToMoodChange,
+  voice,
+  onVoiceChange,
 }: ViewControllerProps) {
   const { room, isConnected, connectionState, start } = useSessionContext();
   const agent = useAgent();
@@ -126,6 +130,8 @@ export function ViewController({
             onConversationStyleChange={onConversationStyleChange}
             adaptToMood={adaptToMood}
             onAdaptToMoodChange={onAdaptToMoodChange}
+            voice={voice}
+            onVoiceChange={onVoiceChange}
             isStarting={isStarting}
           />
         )}

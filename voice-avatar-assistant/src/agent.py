@@ -73,8 +73,16 @@ UI_CARD_TOPIC = "ui-card"
 UI_STATUS_TOPIC = "ui-status"
 CEREMONY_AWARDS_TOPIC = "ceremony-awards"
 
-# Tina's voice: Cartesia "Priya - Trusted Operator", an Indian-English female voice.
-TINA_VOICE_ID = os.environ.get("TINA_VOICE_ID", "f6141af3-5f94-418c-80ed-a45d450e7e2e")
+# Tina's voices (Cartesia). The browser picks one by key; Priya, an Indian-English
+# female voice, is the default (TINA_VOICE_ID overrides the default).
+VOICES = {
+    "priya": "f6141af3-5f94-418c-80ed-a45d450e7e2e",
+    "janvi": "7ea5e9c2-b719-4dc3-b870-5ba5f14d31d8",
+    "kiara": "f8f5f1b2-f02d-4d8e-a40d-fd850a487b3d",
+    "simi": "3b554273-4299-48b9-9aaf-eefd438e3941",
+    "katie": "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+}
+TINA_VOICE_ID = os.environ.get("TINA_VOICE_ID", VOICES["priya"])
 
 # No defaults on enum tool params: LiveKit makes defaulted params nullable, and the
 # Claude API rejects an enum typed ["string", "null"], failing every LLM request.
@@ -91,12 +99,12 @@ def make_stt(language: str) -> stt.STT:
     return deepgram.STT(model="nova-3", language=language)
 
 
-def make_tts(language: str) -> tts.TTS:
+def make_tts(language: str, voice: str = "") -> tts.TTS:
     # Malayalam voices need Sonic 3.6; the other languages stay on the tested sonic-3.
     return cartesia.TTS(
         model="sonic-3.6" if language == "ml" else "sonic-3",
         language=language,
-        voice=TINA_VOICE_ID,
+        voice=VOICES.get(voice, TINA_VOICE_ID),
     )
 
 
@@ -188,10 +196,11 @@ class Assistant(Agent):
             # No temperature: Sonnet 5.5 rejects non-default sampling values.
             # parallel_tool_calls=False avoids duplicate tool calls.
             llm=anthropic.LLM(model=MAIN_MODEL, parallel_tool_calls=False),
-            instructions=self._instructions(),
+            instructions=self._build_instructions(),
         )
 
-    def _instructions(self) -> str:
+    # Not named _instructions: the Agent base class stores its text under that name.
+    def _build_instructions(self) -> str:
         return build_instructions(
             user_name=self._user_name,
             language=self._language,
@@ -389,7 +398,7 @@ class Assistant(Agent):
             self.style = style
         if adapt_to_mood != "unchanged":
             self.adapt_to_mood = adapt_to_mood == "on"
-        await self.update_instructions(self._instructions())
+        await self.update_instructions(self._build_instructions())
         await send_ui(
             self._room,
             UI_STATUS_TOPIC,
@@ -574,6 +583,9 @@ async def run_ceremony(
         wake=wake,
     )
     await session.start(agent=host, room=ctx.room)
+    # Greet the room as soon as Tina is on screen; the hall can't interrupt it.
+    session.say(program.settings.greeting, allow_interruptions=False)
+    wake.extend()
     await send_ui(
         ctx.room,
         UI_STATUS_TOPIC,
@@ -647,7 +659,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
     session = AgentSession(
         stt=make_stt(language),
-        tts=make_tts(language),
+        tts=make_tts(language, attributes.get("voice", "")),
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),
             interruption={"mode": "adaptive"},

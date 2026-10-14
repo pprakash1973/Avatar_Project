@@ -13,6 +13,21 @@ export type Award = {
   slide: number;
 };
 
+export type CeremonySettings = {
+  /** With several winners in a category: ask the host first, or continue after a pause. */
+  multi_winner: 'ask' | 'auto';
+  pause_seconds: number;
+  /** What Tina says as soon as she joins. */
+  greeting: string;
+};
+
+export const DEFAULT_SETTINGS: CeremonySettings = {
+  multi_winner: 'ask',
+  pause_seconds: 8,
+  greeting:
+    "Hello everyone! I'm Tina, and I'm delighted to be your co-host today. Whenever you're ready, just call my name.",
+};
+
 export type ExtractedAward = {
   category: string;
   winner: string;
@@ -28,6 +43,24 @@ export const defaultScript = (a: ExtractedAward) =>
     .join(' ');
 
 const AWARDS_KEY = 'avatar.ceremony.awards';
+const SETTINGS_KEY = 'avatar.ceremony.settings';
+
+export function loadSettings(): CeremonySettings {
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_KEY);
+    return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS;
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+export function saveSettings(settings: CeremonySettings) {
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch {
+    // Not persisted; still used for this ceremony.
+  }
+}
 const DB_NAME = 'avatar-ceremony';
 const STORE = 'files';
 const PDF_KEY = 'deck';

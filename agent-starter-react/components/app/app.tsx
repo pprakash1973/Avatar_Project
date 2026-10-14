@@ -12,8 +12,22 @@ import { Toaster } from '@/components/ui/sonner';
 import { useAgentErrors } from '@/hooks/useAgentErrors';
 import { useCallDiagnostics } from '@/hooks/useCallDiagnostics';
 import { useDebugMode } from '@/hooks/useDebug';
-import { LANGUAGES, type LanguageCode, STYLES, type StyleCode } from '@/lib/agent-channels';
-import { getSavedAdapt, getSavedLanguage, getSavedStyle, getVisitorId } from '@/lib/visitor';
+import {
+  DEFAULT_VOICE,
+  LANGUAGES,
+  type LanguageCode,
+  STYLES,
+  type StyleCode,
+  VOICES,
+  type VoiceCode,
+} from '@/lib/agent-channels';
+import {
+  getSavedAdapt,
+  getSavedLanguage,
+  getSavedStyle,
+  getSavedVoice,
+  getVisitorId,
+} from '@/lib/visitor';
 
 const IN_DEVELOPMENT = process.env.NODE_ENV !== 'production';
 
@@ -48,6 +62,7 @@ export function App({ tokenServerId, tokenEndpoint, agentName, isVideoInputSuppo
   const [visitorId, setVisitorId] = useState('');
   const [style, setStyle] = useState<StyleCode>('friendly');
   const [adaptToMood, setAdaptToMood] = useState(true);
+  const [voice, setVoice] = useState<VoiceCode>(DEFAULT_VOICE);
   // A fresh room per call. Otherwise the cached token (valid 15 min) puts the next
   // call into the previous call's room, where no new agent is dispatched.
   const [roomName, setRoomName] = useState(newRoomName);
@@ -64,11 +79,15 @@ export function App({ tokenServerId, tokenEndpoint, agentName, isVideoInputSuppo
       setStyle(savedStyle as StyleCode);
     }
     setAdaptToMood(getSavedAdapt());
+    const savedVoice = getSavedVoice();
+    if (VOICES.some((v) => v.code === savedVoice)) {
+      setVoice(savedVoice as VoiceCode);
+    }
   }, []);
 
   const participantAttributes = useMemo(
-    () => ({ language, visitor_id: visitorId, style, adapt: adaptToMood ? '1' : '0' }),
-    [language, visitorId, style, adaptToMood]
+    () => ({ language, visitor_id: visitorId, style, adapt: adaptToMood ? '1' : '0', voice }),
+    [language, visitorId, style, adaptToMood, voice]
   );
   const session = useSession(tokenSource, {
     // LiveKit Cloud stops an idle agent; waking it can take ~30 s (default is 20 s).
@@ -103,6 +122,8 @@ export function App({ tokenServerId, tokenEndpoint, agentName, isVideoInputSuppo
           onConversationStyleChange={setStyle}
           adaptToMood={adaptToMood}
           onAdaptToMoodChange={setAdaptToMood}
+          voice={voice}
+          onVoiceChange={setVoice}
         />
       </main>
       <StartAudioButton label="Start Audio" />

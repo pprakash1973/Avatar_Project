@@ -12,9 +12,10 @@ import { CeremonyStage } from '@/components/ceremony/ceremony-stage';
 import { Toaster } from '@/components/ui/sonner';
 import { toastAlert, useAgentErrors } from '@/hooks/useAgentErrors';
 import { useCallDiagnostics } from '@/hooks/useCallDiagnostics';
-import type { Award } from '@/lib/ceremony';
+import { DEFAULT_VOICE, VOICES, type VoiceCode } from '@/lib/agent-channels';
+import { type Award, type CeremonySettings, DEFAULT_SETTINGS, loadSettings } from '@/lib/ceremony';
 import type { PDFDocumentProxy } from '@/lib/pdf';
-import { getSavedMicrophoneId, getSavedSpeakerId } from '@/lib/visitor';
+import { getSavedMicrophoneId, getSavedSpeakerId, getSavedVoice } from '@/lib/visitor';
 
 const newRoomName = () => `voice_assistant_room_${crypto.randomUUID()}`;
 
@@ -30,11 +31,21 @@ function SessionHooks() {
 export function CeremonyApp({ agentName }: { agentName?: string }) {
   const tokenSource = useMemo(() => TokenSource.endpoint('/api/token'), []);
   const [roomName, setRoomName] = useState(newRoomName);
+  const [voice, setVoice] = useState<VoiceCode>(DEFAULT_VOICE);
+  const [settings, setSettings] = useState<CeremonySettings>(DEFAULT_SETTINGS);
+  useEffect(() => {
+    const saved = getSavedVoice();
+    if (VOICES.some((v) => v.code === saved)) {
+      setVoice(saved as VoiceCode);
+    }
+    setSettings(loadSettings());
+  }, []);
+  const participantAttributes = useMemo(() => ({ ...CEREMONY_ATTRIBUTES, voice }), [voice]);
   const session = useSession(tokenSource, {
     agentConnectTimeoutMilliseconds: 60_000,
     ...(agentName ? { agentName } : {}),
     participantName: 'Host',
-    participantAttributes: CEREMONY_ATTRIBUTES,
+    participantAttributes,
     roomName,
   });
 
@@ -89,13 +100,23 @@ export function CeremonyApp({ agentName }: { agentName?: string }) {
     <AgentSessionProvider session={session}>
       <SessionHooks />
       {onStage && deck ? (
-        <CeremonyStage deck={deck} awards={awards} onReconnect={start} onEnd={end} />
+        <CeremonyStage
+          deck={deck}
+          awards={awards}
+          settings={settings}
+          onReconnect={start}
+          onEnd={end}
+        />
       ) : (
         <CeremonySetup
           deck={deck}
           onDeckChange={setDeck}
           awards={awards}
           onAwardsChange={setAwards}
+          voice={voice}
+          onVoiceChange={setVoice}
+          settings={settings}
+          onSettingsChange={setSettings}
           onStart={start}
           isStarting={session.connectionState === ConnectionState.Connecting}
         />

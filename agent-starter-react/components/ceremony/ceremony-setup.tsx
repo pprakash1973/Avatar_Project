@@ -3,17 +3,22 @@
 import { useEffect, useState } from 'react';
 import { CircleNotchIcon, PlusIcon, TrashIcon } from '@phosphor-icons/react/dist/ssr';
 import { MicrophoneSelect } from '@/components/app/microphone-select';
+import { VoiceSelect } from '@/components/app/voice-select';
 import { Button } from '@/components/ui/button';
+import type { VoiceCode } from '@/lib/agent-channels';
 import {
   type Award,
+  type CeremonySettings,
   type ExtractedAward,
   defaultScript,
   loadAwards,
   loadDeck,
   saveAwards,
   saveDeck,
+  saveSettings,
 } from '@/lib/ceremony';
 import { type PDFDocumentProxy, openPdf, pageImage, pageText } from '@/lib/pdf';
+import { saveVoice } from '@/lib/visitor';
 
 // Slides with less text than this are sent as an image so names in pictures are read too.
 const MIN_TEXT_CHARS = 40;
@@ -28,6 +33,10 @@ interface CeremonySetupProps {
   onDeckChange: (deck: PDFDocumentProxy | null) => void;
   awards: Award[];
   onAwardsChange: (awards: Award[]) => void;
+  voice: VoiceCode;
+  onVoiceChange: (voice: VoiceCode) => void;
+  settings: CeremonySettings;
+  onSettingsChange: (settings: CeremonySettings) => void;
   onStart: () => void;
   isStarting: boolean;
 }
@@ -37,9 +46,19 @@ export function CeremonySetup({
   onDeckChange,
   awards,
   onAwardsChange,
+  voice,
+  onVoiceChange,
+  settings,
+  onSettingsChange,
   onStart,
   isStarting,
 }: CeremonySetupProps) {
+  const updateSettings = (patch: Partial<CeremonySettings>) => {
+    const next = { ...settings, ...patch };
+    onSettingsChange(next);
+    saveSettings(next);
+  };
+
   const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
@@ -281,7 +300,66 @@ export function CeremonySetup({
       </section>
 
       <section className="mt-4 rounded-xl border p-4">
-        <h2 className="text-sm font-semibold">3. Hall audio</h2>
+        <h2 className="text-sm font-semibold">3. Tina</h2>
+        <div className="mt-3 flex flex-col gap-4">
+          <VoiceSelect
+            value={voice}
+            onChange={(v) => {
+              onVoiceChange(v);
+              saveVoice(v);
+            }}
+            disabled={isStarting}
+          />
+          <label className="text-muted-foreground text-xs">
+            Opening greeting (Tina says this as soon as she appears)
+            <textarea
+              rows={2}
+              className={inputClassName}
+              value={settings.greeting}
+              onChange={(e) => updateSettings({ greeting: e.target.value })}
+            />
+          </label>
+          <fieldset className="text-sm">
+            <legend className="text-muted-foreground mb-1 text-xs">
+              When a category has several winners
+            </legend>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="multi-winner"
+                checked={settings.multi_winner === 'ask'}
+                onChange={() => updateSettings({ multi_winner: 'ask' })}
+              />
+              Ask the host before announcing the next winner
+            </label>
+            <label className="mt-1 flex flex-wrap items-center gap-2">
+              <input
+                type="radio"
+                name="multi-winner"
+                checked={settings.multi_winner === 'auto'}
+                onChange={() => updateSettings({ multi_winner: 'auto' })}
+              />
+              Continue automatically after a pause of
+              <input
+                type="number"
+                min={2}
+                max={60}
+                className={`${inputClassName} w-16`}
+                value={settings.pause_seconds}
+                onChange={(e) =>
+                  updateSettings({
+                    pause_seconds: Math.min(60, Math.max(2, Number(e.target.value) || 8)),
+                  })
+                }
+              />
+              seconds (the slide moves to the next winner)
+            </label>
+          </fieldset>
+        </div>
+      </section>
+
+      <section className="mt-4 rounded-xl border p-4">
+        <h2 className="text-sm font-semibold">4. Hall audio</h2>
         <p className="text-muted-foreground mt-1 mb-3 text-xs">
           Pick the host microphone and the speaker / PA output, and test them.
         </p>
