@@ -28,7 +28,8 @@ const SAME_CALL_WINDOW_SECONDS = 30;
 const LANGUAGE_CODES = new Set(['en', 'hi', 'ta', 'ml']);
 const STYLE_CODES = new Set(['friendly', 'professional', 'concise', 'humorous']);
 const VISITOR_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
-const ROOM_NAME_RE = /^voice_assistant_room_[A-Za-z0-9-]{8,64}$/;
+// connection_check_ rooms come from the connection test and carry no agent dispatch.
+const ROOM_NAME_RE = /^(voice_assistant_room|connection_check)_[A-Za-z0-9-]{8,64}$/;
 
 function clientIp(req: Request): string {
   return (

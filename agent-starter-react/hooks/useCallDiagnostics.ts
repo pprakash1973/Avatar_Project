@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { ConnectionState, RoomEvent } from 'livekit-client';
 import { useAgent, useSessionContext } from '@livekit/components-react';
+import { CALL_FAILED_EVENT, type CallFailedDetail } from '@/lib/connection-check';
 
 type DiagnosticEvent = [ms: number, type: string, detail?: string];
 
@@ -30,13 +31,17 @@ export function useCallDiagnostics() {
       if (startedAt.current === null) {
         return;
       }
-      const body = JSON.stringify({
+      const attempt: CallFailedDetail = {
         room: room.name,
         started_at: new Date(Date.now() - (performance.now() - startedAt.current)).toISOString(),
         user_agent: navigator.userAgent,
-        avatar_video: sawAvatarVideo.current,
-        events: events.current,
-      });
+        events: events.current as CallFailedDetail['events'],
+      };
+      const body = JSON.stringify({ ...attempt, avatar_video: sawAvatarVideo.current });
+      // The avatar never appeared: open the connection diagnosis on screen.
+      if (!sawAvatarVideo.current) {
+        window.dispatchEvent(new CustomEvent(CALL_FAILED_EVENT, { detail: attempt }));
+      }
       startedAt.current = null;
       events.current = [];
       sawAvatarVideo.current = false;
