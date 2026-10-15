@@ -265,10 +265,10 @@ export function CeremonySetup({
     }
     const { awards: found } = (await response.json()) as { awards: ExtractedAward[] };
     update(
-      found.map((a) => ({
+      found.map((a, i) => ({
         category: a.category,
         winner: a.winner,
-        script: defaultScript(a),
+        script: defaultScript(a, found[i - 1]),
         slide: a.slide,
       }))
     );

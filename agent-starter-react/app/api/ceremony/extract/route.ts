@@ -69,12 +69,15 @@ export async function POST(req: Request) {
       'testimonial giver has the LARGER photo, usually with a job title and company under ' +
       'their name, and is the one quoted or who signs the message. Never give the ' +
       'testimonial giver as the winner. If there are no photos, the winner is the person the ' +
-      'quote or message is about.\n\n' +
+      'quote or message is about. People whose photos are about the same size (for example ' +
+      'a team slide, or two small photos next to each other) are all winners: list every ' +
+      'one of them, in reading order (left to right, top to bottom).\n\n' +
       'The citation is the short headline or tagline about the achievement (for example ' +
       '"Turning Ambiguity into Clear Business Decisions"), copied word-for-word, without ' +
       'the testimonial quote or letter; use an empty string if there is none.\n\n' +
       'If an award has several winners, list each winner as a separate entry with the same ' +
-      'category, in the order they are presented, with the slide for that winner. ' +
+      'category and the same citation, in the order they are presented, with the slide ' +
+      'for that winner. ' +
       'Skip title, agenda, thank-you and other non-award slides. Never invent names or text.',
   });
 

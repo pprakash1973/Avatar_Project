@@ -118,12 +118,23 @@ export type ExtractedAward = {
   slide: number;
 };
 
-// Slide text keeps its line breaks; collapse them so the script reads as one passage.
-export const defaultScript = (a: ExtractedAward) =>
-  [`The award for ${a.category} goes to ${a.winner}.`, a.citation]
-    .map((part) => part.replace(/\s+/g, ' ').trim())
-    .filter(Boolean)
-    .join(' ');
+const oneLine = (text: string) => text.replace(/\s+/g, ' ').trim();
+
+/**
+ * What Tina says for a winner. When the previous winner had the same award and the
+ * same reason (e.g. a team slide), the award and citation aren't repeated:
+ * "The next winner is Arshan Soman."
+ */
+export const defaultScript = (a: ExtractedAward, previous?: ExtractedAward) =>
+  previous &&
+  oneLine(previous.category).toLowerCase() === oneLine(a.category).toLowerCase() &&
+  oneLine(previous.citation) === oneLine(a.citation)
+    ? `The next winner is ${oneLine(a.winner)}.`
+    : // Slide text keeps its line breaks; collapse them so the script reads as one passage.
+      [`The award for ${a.category} goes to ${a.winner}.`, a.citation]
+        .map(oneLine)
+        .filter(Boolean)
+        .join(' ');
 
 const AWARDS_KEY = 'avatar.ceremony.awards';
 const SETTINGS_KEY = 'avatar.ceremony.settings';
