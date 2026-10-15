@@ -147,6 +147,10 @@ async def start_avatar(
             simli_config=simli.SimliConfig(
                 api_key=os.environ["SIMLI_API_KEY"],
                 face_id=os.environ["SIMLI_FACE_ID"],
+                # Trinity faces: the expression between sentences. Happy #0 by default;
+                # see https://docs.simli.com/emotions for the other IDs.
+                emotion_id=os.environ.get("SIMLI_EMOTION_ID")
+                or "92f24a0c-f046-45df-8df0-af7449c04571",
                 # Cap call length to protect the plan's minutes, and don't drop
                 # the avatar while the user is quietly reading a card. A ceremony
                 # runs 30-45 minutes with breaks of a few minutes between awards.
@@ -612,20 +616,18 @@ async def run_ceremony(
     await session.start(
         agent=host, room=ctx.room, room_options=room_options(ceremony=True)
     )
-    # Greet the room as soon as Tina is on screen, in each chosen language; the hall
-    # can't interrupt it.
+    # Tina smiles silently on screen; her first words, the greeting in each chosen
+    # language, come when the host first calls her ("Hello Tina").
     settings = program.settings
     host_name = record.get("name", "")
-    host.say_parts(
-        session,
+    host.greet_on_first_call(
         await host.multilingual(
             settings.greeting,
             settings.greeting_languages,
             settings.greeting_translations,
             lambda text: settings.greeting_for(host_name, text),
-        ),
+        )
     )
-    wake.extend()
     await send_ui(
         ctx.room,
         UI_STATUS_TOPIC,

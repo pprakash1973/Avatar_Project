@@ -44,6 +44,31 @@ DEFAULT_WELCOME_NOTE = (
 
 
 DEFAULT_LISTEN_PAUSE = 1.5
+DEFAULT_WINNER_PAUSE = 3.0
+# A first call that is only a greeting ("Hello Tina", "Good evening Tina").
+_SALUTATION_WORDS = {
+    "hello",
+    "hi",
+    "hey",
+    "hai",
+    "good",
+    "morning",
+    "afternoon",
+    "evening",
+    "day",
+    "there",
+    "dear",
+    "namaste",
+    "namaskar",
+    "namaskaram",
+    "vanakkam",
+    "welcome",
+    "ok",
+    "okay",
+    "so",
+    "um",
+    "uh",
+}
 # A request that stops on one of these words isn't finished ("...the award for");
 # Tina waits for the rest instead of answering half a sentence.
 _DANGLING_WORDS = {
@@ -93,6 +118,12 @@ _DANGLING_WORDS = {
 UNFINISHED_WAIT_SECONDS = 3.0
 
 
+def just_salutation(text: str) -> bool:
+    """True if the host only greeted Tina, e.g. "Hello Tina" or "Good evening, Tina"."""
+    words = [w for w in _phrase(text).split() if not mentions_name(w)]
+    return all(w in _SALUTATION_WORDS for w in words)
+
+
 def unfinished(text: str) -> bool:
     """True if the host stopped mid-request, e.g. "Tina," or "announce the award for"."""
     words = _phrase(text).split()
@@ -106,8 +137,6 @@ def unfinished(text: str) -> bool:
 
 
 DEFAULT_CONGRATULATIONS = "Congratulations, {winner}!"
-# Matches APPLAUSE_MS in agent-starter-react/components/ceremony/applause-crowd.tsx.
-APPLAUSE_SECONDS = 5.0
 LANGUAGE_NAMES = {"en": "English", "hi": "Hindi", "ta": "Tamil", "ml": "Malayalam"}
 KeywordAction = Literal["repeat", "hold", "continue"]
 DEFAULT_KEYWORDS: list[tuple[str, KeywordAction]] = [
@@ -148,8 +177,9 @@ class Award:
 class CeremonySettings:
     # With several winners in a category: "ask" the host before each next winner,
     # or continue "auto"matically after a pause.
-    multi_winner: Literal["ask", "auto"] = "ask"
-    pause_seconds: float = 8.0
+    # Several winners in a category are announced one after another, each with its
+    # slide, this many seconds apart.
+    pause_seconds: float = DEFAULT_WINNER_PAUSE
     greeting: str = DEFAULT_GREETING
     welcome_note: str = DEFAULT_WELCOME_NOTE
     # Languages the greeting / welcome note are spoken in, in order; English uses the
@@ -219,8 +249,9 @@ class CeremonyProgram:
         items = data if isinstance(data, list) else data.get("awards", [])
         raw = {} if isinstance(data, list) else data.get("settings", {}) or {}
         settings = CeremonySettings(
-            multi_winner="auto" if raw.get("multi_winner") == "auto" else "ask",
-            pause_seconds=min(max(float(raw.get("pause_seconds", 8)), 2), 60),
+            pause_seconds=min(
+                max(float(raw.get("pause_seconds", DEFAULT_WINNER_PAUSE)), 1), 30
+            ),
             greeting=str(raw.get("greeting") or DEFAULT_GREETING).strip(),
             welcome_note=str(raw.get("welcome_note") or DEFAULT_WELCOME_NOTE).strip(),
             greeting_languages=_languages(raw.get("greeting_languages")),
@@ -360,6 +391,9 @@ class CeremonyHost(Agent):
         # "please hold": ignore everything but a continue phrase until resumed.
         self._resumed = asyncio.Event()
         self._resumed.set()
+        # Tina smiles silently until the host first calls her ("Hello Tina"), then
+        # gives this greeting: (language, text) pairs.
+        self._greeting: list[tuple[str, str]] = []
         # The start of a request the host hasn't finished, and when it was heard.
         self._pending = ""
         self._pending_at = 0.0
@@ -449,6 +483,15 @@ class CeremonyHost(Agent):
         # In the hall Tina only reacts when called by name (plus a short follow-up window).
         if not self._wake.accepts(text):
             raise StopResponse()
+        if self._greeting:
+            # The host's first call: Tina's first words are the greeting.
+            logger.info("first call: %s", text)
+            parts, self._greeting = self._greeting, []
+            self.say_parts(session, parts)
+            self._wake.extend()
+            if just_salutation(text):
+                raise StopResponse()
+            # Otherwise answer the request too, right after the greeting.
         if unfinished(text):
             logger.info("waiting for the rest of: %s", text)
             self._pending = text
@@ -471,6 +514,9 @@ class CeremonyHost(Agent):
         self._pending_task = None
         if text and not self.on_hold:
             self.session.generate_reply(user_input=text)
+
+    def greet_on_first_call(self, parts: list[tuple[str, str]]) -> None:
+        self._greeting = parts
 
     def _tts_for(self, language: str) -> tts.TTS:
         if language not in self._voices:
@@ -541,7 +587,7 @@ class CeremonyHost(Agent):
                 - When the host asks you to give the welcome note, welcome address or opening speech, call say_welcome_note. It speaks the approved text word-for-word.
                 - To announce a specific award, call announce_award with its category. When the host asks for "the next award" without naming it, call announce_next_award. These speak the approved announcement and show the slide. Never announce, guess or mention a winner's name yourself: you do not know the winners.
                 - When an announce tool succeeds it returns nothing; the announcement you then see in the conversation (ending with the congratulations to the winner) is the approved text and was spoken successfully. The same goes for the welcome note. Never apologise for it, comment on it or repeat it.
-                - Some categories have several winners. If you asked whether to announce the next winner of a category and the host agrees, call announce_award with that same category.
+                - Some categories have several winners: one announce call announces all of them, one after another, each with its slide.
                 - If the host asks for a category that isn't in the list, say so briefly and mention the closest category names.
                 - If a category is fully announced and the host asks for it again, confirm first; if they confirm, call announce_award with repeat set to true.
                 - Use show_slide when the host asks to show a particular slide (the title slide is slide one), and hide_slides when they ask to hide the slide or show you instead.
@@ -580,32 +626,16 @@ class CeremonyHost(Agent):
     async def _continue_category(
         self, session: AgentSession, first: SpeechHandle, rest: list[Award]
     ) -> None:
-        """Auto mode: after each winner, pause for applause, then the next winner."""
+        """Announces the remaining winners of a category, each with its slide, after a
+        short pause."""
         previous = first
         for award in rest:
             await previous.wait_for_playout()
-            await asyncio.sleep(
-                max(self._program.settings.pause_seconds, APPLAUSE_SECONDS)
-            )
+            await asyncio.sleep(self._program.settings.pause_seconds)
             # "please hold" pauses the remaining winners too.
             await self._resumed.wait()
             previous = await self._speak(session, award)
         await self._refresh()
-
-    async def _ask_next_winner(
-        self, session: AgentSession, first: SpeechHandle, category: str, count: int
-    ) -> None:
-        """Ask mode: once the applause is over, ask whether to announce the next winner."""
-        await first.wait_for_playout()
-        await asyncio.sleep(APPLAUSE_SECONDS)
-        if self.on_hold:
-            return
-        more = "one more winner" if count == 1 else f"{count} more winners"
-        question = f"There is {more} for {category}. Shall I announce the next one?"
-        self._prompts.add(question)
-        session.say(question, allow_interruptions=False)
-        # The host's "yes" doesn't need the name again.
-        self._wake.extend()
 
     async def _announce(self, ctx: RunContext, category: str, repeat: bool) -> str:
         entries = self._program.entries(category)
@@ -620,10 +650,8 @@ class CeremonyHost(Agent):
         session = ctx.session
         first = await self._speak(session, pending[0])
         rest = pending[1:]
-        if rest and self._program.settings.multi_winner == "auto":
+        if rest:
             self._run(self._continue_category(session, first, rest))
-        elif rest:
-            self._run(self._ask_next_winner(session, first, category, len(rest)))
         await self._refresh()
         # The announcement is the whole reply: don't let the model add anything.
         raise StopResponse()

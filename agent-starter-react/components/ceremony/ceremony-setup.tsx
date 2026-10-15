@@ -442,7 +442,7 @@ export function CeremonySetup({
             disabled={isStarting}
           />
           <label className="text-muted-foreground text-xs">
-            Host name (Tina greets the host by name when she appears)
+            Host name (Tina smiles silently until the host says “Hello Tina”, then greets them by name)
             <input
               className={inputClassName}
               value={hostName}
@@ -631,42 +631,23 @@ export function CeremonySetup({
             />
             seconds of silence before Tina answers (raise it if she cuts the host off)
           </label>
-          <fieldset className="text-sm">
-            <legend className="text-muted-foreground mb-1 text-xs">
-              When a category has several winners
-            </legend>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="multi-winner"
-                checked={settings.multi_winner === 'ask'}
-                onChange={() => updateSettings({ multi_winner: 'ask' })}
-              />
-              Ask the host before announcing the next winner
-            </label>
-            <label className="mt-1 flex flex-wrap items-center gap-2">
-              <input
-                type="radio"
-                name="multi-winner"
-                checked={settings.multi_winner === 'auto'}
-                onChange={() => updateSettings({ multi_winner: 'auto' })}
-              />
-              Continue automatically after a pause of
-              <input
-                type="number"
-                min={2}
-                max={60}
-                className={`${inputClassName} w-16`}
-                value={settings.pause_seconds}
-                onChange={(e) =>
-                  updateSettings({
-                    pause_seconds: Math.min(60, Math.max(2, Number(e.target.value) || 8)),
-                  })
-                }
-              />
-              seconds (the slide moves to the next winner)
-            </label>
-          </fieldset>
+          <label className="flex flex-wrap items-center gap-2 text-sm">
+            When a category has several winners, announce them one after another, each with their
+            slide, with a pause of
+            <input
+              type="number"
+              min={1}
+              max={30}
+              className={`${inputClassName} w-16`}
+              value={settings.pause_seconds}
+              onChange={(e) =>
+                updateSettings({
+                  pause_seconds: Math.min(30, Math.max(1, Number(e.target.value) || 3)),
+                })
+              }
+            />
+            seconds between winners
+          </label>
         </div>
       </section>
 

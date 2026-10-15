@@ -15,10 +15,9 @@ export type Award = {
 };
 
 export type CeremonySettings = {
-  /** With several winners in a category: ask the host first, or continue after a pause. */
-  multi_winner: 'ask' | 'auto';
+  /** Seconds between the winners of one category (all are announced together). */
   pause_seconds: number;
-  /** What Tina says as soon as she joins; {name} is the host's name. */
+  /** Tina's first words, when the host first calls her; {name} is the host's name. */
   greeting: string;
   /** Read word-for-word when the host asks for the welcome note. */
   welcome_note: string;
@@ -83,8 +82,7 @@ export function spokenText(text: string, pronunciations: Pronunciation[]) {
 }
 
 export const DEFAULT_SETTINGS: CeremonySettings = {
-  multi_winner: 'ask',
-  pause_seconds: 8,
+  pause_seconds: 3,
   greeting: 'Hi {name}, good day! I am happy to be your co-host.',
   welcome_note:
     'Good evening, esteemed UST leaders and dear colleagues. A warm welcome to the PACS Annual ' +
@@ -135,15 +133,26 @@ const OLD_DEFAULT_GREETING =
 export const greetingFor = (greeting: string, hostName: string) =>
   greeting.replaceAll('{name}', hostName.trim() || 'everyone');
 
+/** Saved settings from earlier versions, brought up to date. */
+function migrate(saved: Record<string, unknown>): CeremonySettings {
+  const settings = { ...DEFAULT_SETTINGS, ...saved } as CeremonySettings;
+  // Earlier versions saved a greeting without the host's name; use the new default.
+  if (settings.greeting === OLD_DEFAULT_GREETING) {
+    settings.greeting = DEFAULT_SETTINGS.greeting;
+  }
+  // Earlier versions asked before each extra winner, with a long pause; all winners are
+  // now announced together, a few seconds apart.
+  if ('multi_winner' in saved) {
+    delete (settings as Record<string, unknown>).multi_winner;
+    settings.pause_seconds = DEFAULT_SETTINGS.pause_seconds;
+  }
+  return settings;
+}
+
 export function loadSettings(): CeremonySettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_KEY);
-    const saved = raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS;
-    // Earlier versions saved a greeting without the host's name; use the new default.
-    if (saved.greeting === OLD_DEFAULT_GREETING) {
-      saved.greeting = DEFAULT_SETTINGS.greeting;
-    }
-    return saved;
+    return raw ? migrate(JSON.parse(raw)) : DEFAULT_SETTINGS;
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -181,8 +190,8 @@ export async function loadServerSettings(): Promise<CeremonySettings | null> {
     if (!response.ok) {
       return null;
     }
-    const saved = (await response.json()) as Partial<CeremonySettings> | null;
-    return saved ? { ...DEFAULT_SETTINGS, ...saved } : null;
+    const saved = (await response.json()) as Record<string, unknown> | null;
+    return saved ? migrate(saved) : null;
   } catch {
     return null;
   }
