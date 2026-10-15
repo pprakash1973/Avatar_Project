@@ -37,7 +37,9 @@ import { getSavedSpeakerId, saveName, saveVoice } from '@/lib/visitor';
 
 type SinkableAudio = HTMLAudioElement & { setSinkId?: (sinkId: string) => Promise<void> };
 
-// Slides with less text than this are sent as an image so names in pictures are read too.
+// Slides with less text than this are sent as a sharper image, since the names are
+// probably in pictures. Every slide is sent as an image (budget allowing) so the model
+// can compare photo sizes: the winner has the smaller photo, a testimonial giver the larger.
 const MIN_TEXT_CHARS = 40;
 // Keep the extraction request well under Vercel's 4.5 MB body limit.
 const MAX_REQUEST_BYTES = 3_500_000;
@@ -242,8 +244,11 @@ export function CeremonySetup({
     for (let n = 1; n <= doc.numPages; n++) {
       const text = await pageText(doc, n);
       let image: string | undefined;
-      if (text.length < MIN_TEXT_CHARS && size < MAX_REQUEST_BYTES) {
-        image = await pageImage(doc, n, 1024, 0.6);
+      if (size < MAX_REQUEST_BYTES) {
+        image =
+          text.length < MIN_TEXT_CHARS
+            ? await pageImage(doc, n, 1024, 0.6)
+            : await pageImage(doc, n, 800, 0.5);
         size += image.length;
       }
       size += text.length;
@@ -545,7 +550,7 @@ export function CeremonySetup({
                 checked={settings.celebrate}
                 onChange={(e) => updateSettings({ celebrate: e.target.checked })}
               />
-              Five seconds of applause after each winner
+              Show the ovation photo for five seconds after each winner
             </label>
             <div className="flex flex-wrap items-center gap-3 text-xs">
               {ovationUrl && (
@@ -582,7 +587,7 @@ export function CeremonySetup({
               )}
               <span className="text-muted-foreground">
                 A photo of an audience applauding (one you have the rights to) rises along the
-                bottom of the screen during the applause. Wide photos work best.
+                bottom of the screen; no sound is played. Wide photos work best.
               </span>
             </div>
           </div>
@@ -609,6 +614,23 @@ export function CeremonySetup({
               Lively MC: upbeat and energetic
             </label>
           </fieldset>
+          <label className="flex flex-wrap items-center gap-2 text-sm">
+            Wait for
+            <input
+              type="number"
+              min={0.5}
+              max={4}
+              step={0.1}
+              className={`${inputClassName} w-20`}
+              value={settings.listen_pause}
+              onChange={(e) =>
+                updateSettings({
+                  listen_pause: Math.min(4, Math.max(0.5, Number(e.target.value) || 1.5)),
+                })
+              }
+            />
+            seconds of silence before Tina answers (raise it if she cuts the host off)
+          </label>
           <fieldset className="text-sm">
             <legend className="text-muted-foreground mb-1 text-xs">
               When a category has several winners

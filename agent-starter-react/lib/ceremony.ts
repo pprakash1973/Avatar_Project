@@ -34,7 +34,9 @@ export type CeremonySettings = {
   congratulations: string;
   /** How Tina carries herself: a polished host (default) or a lively MC. */
   style: 'professional' | 'lively';
-  /** Applause after each winner (plus the ovation photo, if one was uploaded). */
+  /** Seconds of silence before Tina treats the host's request as finished. */
+  listen_pause: number;
+  /** Show the ovation photo (if one was uploaded) after each winner. */
   celebrate: boolean;
   /** Phrases the host can say (without "Tina") to control her. */
   keywords: Keyword[];
@@ -96,6 +98,7 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   congratulate: true,
   congratulations: 'Congratulations, {winner}!',
   style: 'professional',
+  listen_pause: 1.5,
   celebrate: true,
   keywords: [
     { phrase: 'please repeat', action: 'repeat' },

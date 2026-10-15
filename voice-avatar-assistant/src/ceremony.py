@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import textwrap
+import time
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -27,7 +28,7 @@ from livekit.agents import (
 from livekit.agents.voice import SpeechHandle
 
 from claude import HELPER_MODEL, HelperUsage, get_client
-from wake_word import WakeWord
+from wake_word import WakeWord, mentions_name
 from web_search import run_web_search
 
 logger = logging.getLogger("agent.ceremony")
@@ -40,6 +41,68 @@ DEFAULT_WELCOME_NOTE = (
     "time out of their busy schedules to join us. Your presence and continued support "
     "make this occasion truly special. Let us celebrate excellence and achievement together!"
 )
+
+
+DEFAULT_LISTEN_PAUSE = 1.5
+# A request that stops on one of these words isn't finished ("...the award for");
+# Tina waits for the rest instead of answering half a sentence.
+_DANGLING_WORDS = {
+    "a",
+    "an",
+    "the",
+    "for",
+    "of",
+    "to",
+    "and",
+    "or",
+    "but",
+    "with",
+    "about",
+    "from",
+    "on",
+    "in",
+    "at",
+    "by",
+    "is",
+    "are",
+    "announce",
+    "please",
+    "give",
+    "show",
+    "say",
+    "tell",
+    "who",
+    "what",
+    "which",
+    "how",
+    "my",
+    "our",
+    "your",
+    "their",
+    "this",
+    "that",
+    "um",
+    "uh",
+    "hey",
+    "ok",
+    "okay",
+    "so",
+}
+# How long the host must stay silent after an unfinished request before Tina
+# answers what she heard.
+UNFINISHED_WAIT_SECONDS = 3.0
+
+
+def unfinished(text: str) -> bool:
+    """True if the host stopped mid-request, e.g. "Tina," or "announce the award for"."""
+    words = _phrase(text).split()
+    if not words:
+        return False
+    if words[-1] in _DANGLING_WORDS:
+        return True
+    # Just the name ("Tina", "hey Tina"): the request itself is still coming.
+    rest = [w for w in words if not mentions_name(w) and w not in _DANGLING_WORDS]
+    return mentions_name(text) and not rest
 
 
 DEFAULT_CONGRATULATIONS = "Congratulations, {winner}!"
@@ -98,6 +161,9 @@ class CeremonySettings:
     congratulate: bool = True
     # How Tina carries herself: a polished "professional" host, or a "lively" MC.
     style: Literal["professional", "lively"] = "professional"
+    # Seconds of silence before Tina treats the host's request as finished, so a
+    # pause mid-sentence ("Tina, please announce ... the next award") isn't cut off.
+    listen_pause: float = DEFAULT_LISTEN_PAUSE
     congratulations: str = DEFAULT_CONGRATULATIONS
     # Phrases the host can say without "Tina", e.g. "please hold".
     keywords: list[tuple[str, KeywordAction]] = field(
@@ -163,6 +229,9 @@ class CeremonyProgram:
             welcome_translations=_translations(raw.get("welcome_translations")),
             congratulate=raw.get("congratulate", True) is not False,
             style="lively" if raw.get("style") == "lively" else "professional",
+            listen_pause=min(
+                max(float(raw.get("listen_pause") or DEFAULT_LISTEN_PAUSE), 0.5), 4.0
+            ),
             congratulations=str(
                 raw.get("congratulations") or DEFAULT_CONGRATULATIONS
             ).strip(),
@@ -291,14 +360,33 @@ class CeremonyHost(Agent):
         # "please hold": ignore everything but a continue phrase until resumed.
         self._resumed = asyncio.Event()
         self._resumed.set()
+        # The start of a request the host hasn't finished, and when it was heard.
+        self._pending = ""
+        self._pending_at = 0.0
+        self._pending_task: asyncio.Task | None = None
+        # When the host was last heard (any transcript, even partial).
+        self._last_heard = 0.0
         # What "please repeat" says again: (language, text) pairs.
         self._last_said: list[tuple[str, str]] = []
         # Prompts like "Shall I announce the next one?" aren't worth repeating.
         self._prompts: set[str] = {HOLD_REPLY, RESUME_REPLY, NOTHING_TO_REPEAT}
         # Not named _instructions: the Agent base class stores its text under that name.
-        super().__init__(llm=llm_model, instructions=self._build_instructions())
+        pause = program.settings.listen_pause
+        super().__init__(
+            llm=llm_model,
+            instructions=self._build_instructions(),
+            # The streaming turn detector's default (0.3 s) cut hosts off mid-sentence.
+            # A request the detector thinks is unfinished waits up to max_delay.
+            turn_handling={
+                "endpointing": {"min_delay": pause, "max_delay": pause + 2.0}
+            },
+        )
 
     async def on_enter(self) -> None:
+        @self.session.on("user_input_transcribed")
+        def _on_transcript(ev) -> None:
+            self._last_heard = time.monotonic()
+
         @self.session.on("conversation_item_added")
         def _on_item(ev) -> None:
             item = ev.item
@@ -325,7 +413,16 @@ class CeremonyHost(Agent):
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
     ) -> None:
-        text = new_message.text_content or ""
+        text = (new_message.text_content or "").strip()
+        if self._pending_task:
+            self._pending_task.cancel()
+            self._pending_task = None
+        if self._pending and time.monotonic() - self._pending_at < 15:
+            # The rest of a request the host paused in the middle of.
+            text = f"{self._pending} {text}"
+            new_message.content = [text]
+            logger.info("joined a paused request: %s", text)
+        self._pending = ""
         action = self._program.settings.keyword(text)
         session = self.session
         if self.on_hold:
@@ -352,6 +449,28 @@ class CeremonyHost(Agent):
         # In the hall Tina only reacts when called by name (plus a short follow-up window).
         if not self._wake.accepts(text):
             raise StopResponse()
+        if unfinished(text):
+            logger.info("waiting for the rest of: %s", text)
+            self._pending = text
+            self._pending_at = time.monotonic()
+            self._wake.extend()
+            self._pending_task = asyncio.create_task(self._answer_pending_later())
+            raise StopResponse()
+
+    async def _answer_pending_later(self) -> None:
+        """Nothing followed the unfinished request: answer what was said."""
+        # Wait while the host is still talking: the rest usually arrives as the next turn,
+        # which cancels this task.
+        while (
+            self.session.user_state == "speaking"
+            or time.monotonic() - max(self._pending_at, self._last_heard)
+            < UNFINISHED_WAIT_SECONDS
+        ):
+            await asyncio.sleep(0.25)
+        text, self._pending = self._pending, ""
+        self._pending_task = None
+        if text and not self.on_hold:
+            self.session.generate_reply(user_input=text)
 
     def _tts_for(self, language: str) -> tts.TTS:
         if language not in self._voices:

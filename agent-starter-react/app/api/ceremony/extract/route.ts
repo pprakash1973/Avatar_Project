@@ -60,11 +60,19 @@ export async function POST(req: Request) {
   content.push({
     type: 'text',
     text:
-      'These are the slides of an award ceremony deck (text per slide; images for slides ' +
-      'whose text could not be read). List every award that is presented: the award ' +
-      'category, the winner (person or team name exactly as written), the citation (the ' +
-      'description of why they won, copied word-for-word from the slide, or an empty ' +
-      'string if there is none), and the number of the slide that announces the winner. ' +
+      'These are the slides of an award ceremony deck (text per slide, each followed by an ' +
+      'image of the slide when available). List every award that is presented: the award ' +
+      'category (usually the slide title), the winner (person or team name exactly as ' +
+      'written), the citation and the number of the slide that announces the winner.\n\n' +
+      'Some slides show two people: the winner and a testimonial giver (a client or leader ' +
+      'who praises the winner). The winner is the person with the SMALLER photo. The ' +
+      'testimonial giver has the LARGER photo, usually with a job title and company under ' +
+      'their name, and is the one quoted or who signs the message. Never give the ' +
+      'testimonial giver as the winner. If there are no photos, the winner is the person the ' +
+      'quote or message is about.\n\n' +
+      'The citation is the short headline or tagline about the achievement (for example ' +
+      '"Turning Ambiguity into Clear Business Decisions"), copied word-for-word, without ' +
+      'the testimonial quote or letter; use an empty string if there is none.\n\n' +
       'If an award has several winners, list each winner as a separate entry with the same ' +
       'category, in the order they are presented, with the slide for that winner. ' +
       'Skip title, agenda, thank-you and other non-award slides. Never invent names or text.',
