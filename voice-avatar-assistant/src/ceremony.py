@@ -14,6 +14,7 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import Literal
 
+import anthropic
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -21,10 +22,13 @@ from livekit.agents import (
     StopResponse,
     function_tool,
     llm,
+    tts,
 )
 from livekit.agents.voice import SpeechHandle
 
+from claude import HELPER_MODEL, HelperUsage, get_client
 from wake_word import WakeWord
+from web_search import run_web_search
 
 logger = logging.getLogger("agent.ceremony")
 
@@ -36,6 +40,36 @@ DEFAULT_WELCOME_NOTE = (
     "time out of their busy schedules to join us. Your presence and continued support "
     "make this occasion truly special. Let us celebrate excellence and achievement together!"
 )
+
+
+DEFAULT_CONGRATULATIONS = "Congratulations, {winner}!"
+# Matches APPLAUSE_MS in agent-starter-react/components/ceremony/applause-crowd.tsx.
+APPLAUSE_SECONDS = 5.0
+LANGUAGE_NAMES = {"en": "English", "hi": "Hindi", "ta": "Tamil", "ml": "Malayalam"}
+KeywordAction = Literal["repeat", "hold", "continue"]
+DEFAULT_KEYWORDS: list[tuple[str, KeywordAction]] = [
+    ("please repeat", "repeat"),
+    ("repeat that", "repeat"),
+    ("please hold", "hold"),
+    ("hold on", "hold"),
+    ("continue", "continue"),
+]
+
+
+def _phrase(text: str) -> str:
+    return " ".join(re.sub(r"[^\w ]", " ", text.lower()).split())
+
+
+def _languages(raw) -> list[str]:
+    codes = [c for c in LANGUAGE_NAMES if c in (raw or [])]
+    return codes or ["en"]
+
+
+def _translations(raw) -> dict[str, str]:
+    raw = raw if isinstance(raw, dict) else {}
+    return {
+        c: str(raw[c]).strip() for c in LANGUAGE_NAMES if str(raw.get(c, "")).strip()
+    }
 
 
 @dataclass
@@ -55,11 +89,40 @@ class CeremonySettings:
     pause_seconds: float = 8.0
     greeting: str = DEFAULT_GREETING
     welcome_note: str = DEFAULT_WELCOME_NOTE
+    # Languages the greeting / welcome note are spoken in, in order; English uses the
+    # text above, the others their translation (translated on the fly if empty).
+    greeting_languages: list[str] = field(default_factory=lambda: ["en"])
+    greeting_translations: dict[str, str] = field(default_factory=dict)
+    welcome_languages: list[str] = field(default_factory=lambda: ["en"])
+    welcome_translations: dict[str, str] = field(default_factory=dict)
+    congratulate: bool = True
+    congratulations: str = DEFAULT_CONGRATULATIONS
+    # Phrases the host can say without "Tina", e.g. "please hold".
+    keywords: list[tuple[str, KeywordAction]] = field(
+        default_factory=lambda: list(DEFAULT_KEYWORDS)
+    )
     # Written name -> how Tina should say it, e.g. "Soumya" -> "Sow-mya".
     pronunciations: dict[str, str] = field(default_factory=dict)
 
-    def greeting_for(self, host_name: str) -> str:
-        return self.greeting.replace("{name}", host_name or "everyone")
+    def greeting_for(self, host_name: str, text: str | None = None) -> str:
+        return (self.greeting if text is None else text).replace(
+            "{name}", host_name or "everyone"
+        )
+
+    def announcement(self, award: "Award") -> str:
+        """The approved script plus the congratulations, as Tina says it."""
+        parts = [award.script]
+        if self.congratulate and award.winner:
+            parts.append(self.congratulations.replace("{winner}", award.winner))
+        return self.spoken(" ".join(parts))
+
+    def keyword(self, text: str) -> KeywordAction | None:
+        """The action of the longest keyword phrase in what the host said."""
+        said = f" {_phrase(text)} "
+        for phrase, action in sorted(self.keywords, key=lambda k: -len(k[0])):
+            if phrase and f" {_phrase(phrase)} " in said:
+                return action
+        return None
 
     def spoken(self, text: str) -> str:
         """Text as Tina should say it: names replaced by their spoken spelling."""
@@ -92,6 +155,21 @@ class CeremonyProgram:
             pause_seconds=min(max(float(raw.get("pause_seconds", 8)), 2), 60),
             greeting=str(raw.get("greeting") or DEFAULT_GREETING).strip(),
             welcome_note=str(raw.get("welcome_note") or DEFAULT_WELCOME_NOTE).strip(),
+            greeting_languages=_languages(raw.get("greeting_languages")),
+            greeting_translations=_translations(raw.get("greeting_translations")),
+            welcome_languages=_languages(raw.get("welcome_languages")),
+            welcome_translations=_translations(raw.get("welcome_translations")),
+            congratulate=raw.get("congratulate", True) is not False,
+            congratulations=str(
+                raw.get("congratulations") or DEFAULT_CONGRATULATIONS
+            ).strip(),
+            keywords=[
+                (_phrase(str(k["phrase"])), k["action"])
+                for k in raw.get("keywords", DEFAULT_KEYWORDS_RAW) or []
+                if isinstance(k, dict)
+                and _phrase(str(k.get("phrase", "")))
+                and k.get("action") in ("repeat", "hold", "continue")
+            ],
             pronunciations={
                 str(p["written"]).strip(): str(p["spoken"]).strip()
                 for p in raw.get("pronunciations", []) or []
@@ -144,6 +222,33 @@ class CeremonyProgram:
         return None
 
 
+HOLD_REPLY = "Sure, I'll wait."
+RESUME_REPLY = "Thank you! Let's continue."
+NOTHING_TO_REPEAT = "There's nothing to repeat yet."
+DEFAULT_KEYWORDS_RAW = [{"phrase": p, "action": a} for p, a in DEFAULT_KEYWORDS]
+
+
+async def translate(text: str, language: str, usage: HelperUsage) -> str:
+    """Fallback when the operator left a translation empty."""
+    response = await get_client().messages.create(
+        model=HELPER_MODEL,
+        max_tokens=2000,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"Translate this text, spoken aloud by a warm, formal co-host at a "
+                    f"corporate award ceremony in India, into natural spoken "
+                    f"{LANGUAGE_NAMES[language]} in the native script. Keep personal and "
+                    f"company names as they are. Reply with only the final translation: no notes, alternatives or self-corrections.\n\n{text}"
+                ),
+            }
+        ],
+    )
+    usage.add(response.usage)
+    return "".join(b.text for b in response.content if b.type == "text").strip()
+
+
 class CeremonyHost(Agent):
     def __init__(
         self,
@@ -152,22 +257,126 @@ class CeremonyHost(Agent):
         llm_model: llm.LLM,
         send_slide,
         send_view,
+        send_status,
+        make_tts,
+        usage: HelperUsage,
         wake: WakeWord,
     ) -> None:
         self._program = program
         self._send_slide = send_slide
         self._send_view = send_view
+        self._send_status = send_status
+        self._make_tts = make_tts
+        # Not named _tts: the Agent base class uses that name for its own TTS.
+        self._voices: dict[str, tts.TTS] = {}
+        self._usage = usage
         self._wake = wake
         self._tasks: set[asyncio.Task] = set()
+        # "please hold": ignore everything but a continue phrase until resumed.
+        self._resumed = asyncio.Event()
+        self._resumed.set()
+        # What "please repeat" says again: (language, text) pairs.
+        self._last_said: list[tuple[str, str]] = []
+        # Prompts like "Shall I announce the next one?" aren't worth repeating.
+        self._prompts: set[str] = {HOLD_REPLY, RESUME_REPLY, NOTHING_TO_REPEAT}
         # Not named _instructions: the Agent base class stores its text under that name.
         super().__init__(llm=llm_model, instructions=self._build_instructions())
+
+    async def on_enter(self) -> None:
+        @self.session.on("conversation_item_added")
+        def _on_item(ev) -> None:
+            item = ev.item
+            if getattr(item, "role", None) != "assistant":
+                return
+            text = (item.text_content or "").strip()
+            if (
+                text
+                and text not in self._prompts
+                and all(text != said for _, said in self._last_said)
+            ):
+                # A reply the model wrote: "please repeat" says that again.
+                self._last_said = [("en", text)]
+
+    def _run(self, coro) -> None:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    @property
+    def on_hold(self) -> bool:
+        return not self._resumed.is_set()
 
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
     ) -> None:
-        # In the hall Tina only reacts when called by name (plus a short follow-up window).
-        if not self._wake.accepts(new_message.text_content or ""):
+        text = new_message.text_content or ""
+        action = self._program.settings.keyword(text)
+        session = self.session
+        if self.on_hold:
+            if action == "continue":
+                logger.info("resumed")
+                self._resumed.set()
+                await self._send_status({"type": "hold", "on": False})
+                session.say(RESUME_REPLY, allow_interruptions=False)
+                self._wake.extend()
             raise StopResponse()
+        if action == "hold":
+            logger.info("on hold")
+            self._resumed.clear()
+            await self._send_status({"type": "hold", "on": True})
+            session.say(HOLD_REPLY, allow_interruptions=False)
+            raise StopResponse()
+        if action == "repeat":
+            logger.info("repeat")
+            if self._last_said:
+                self.say_parts(session, self._last_said)
+            else:
+                session.say(NOTHING_TO_REPEAT, allow_interruptions=False)
+            raise StopResponse()
+        # In the hall Tina only reacts when called by name (plus a short follow-up window).
+        if not self._wake.accepts(text):
+            raise StopResponse()
+
+    def _tts_for(self, language: str) -> tts.TTS:
+        if language not in self._voices:
+            self._voices[language] = self._make_tts(language)
+        return self._voices[language]
+
+    def say_parts(
+        self, session: AgentSession, parts: list[tuple[str, str]]
+    ) -> SpeechHandle | None:
+        """Says each (language, text) in turn; other languages use their own voice model."""
+        handle = None
+        for language, text in parts:
+            if language == "en":
+                handle = session.say(text, allow_interruptions=False)
+                continue
+            synthesizer = self._tts_for(language)
+
+            async def frames(text: str = text, synthesizer: tts.TTS = synthesizer):
+                async with synthesizer.synthesize(text) as stream:
+                    async for audio in stream:
+                        yield audio.frame
+
+            handle = session.say(text, audio=frames(), allow_interruptions=False)
+        self._last_said = list(parts)
+        return handle
+
+    async def multilingual(
+        self, english: str, languages: list[str], translations: dict[str, str], fill
+    ) -> list[tuple[str, str]]:
+        """(language, spoken text) for each language; fill() adds e.g. the host's name."""
+        parts = []
+        for language in languages:
+            text = english if language == "en" else translations.get(language, "")
+            if not text:
+                try:
+                    text = await translate(english, language, self._usage)
+                except anthropic.APIError as e:
+                    logger.warning("translation to %s failed: %s", language, e)
+                    continue
+            parts.append((language, self._program.settings.spoken(fill(text))))
+        return parts
 
     def _build_instructions(self) -> str:
         lines = []
@@ -189,17 +398,20 @@ class CeremonyHost(Agent):
                 """\
                 You are Tina, the AI co-host at a live award ceremony, speaking to the host and the audience through a microphone and speakers. Speak warm, clear English.
 
+                Your style is that of a seasoned, charismatic event MC, like an expert DJ working the room: upbeat, celebratory and full of energy, with short, punchy lines that get the audience cheering. Stay gracious and respectful; never joke about the winners or the leaders.
+
                 # How to behave on stage
 
                 - Keep anything you say yourself very short: one sentence, plain text, no lists or formatting.
                 - When the host asks you to give the welcome note, welcome address or opening speech, call say_welcome_note. It speaks the approved text word-for-word.
                 - To announce a specific award, call announce_award with its category. When the host asks for "the next award" without naming it, call announce_next_award. These speak the approved announcement and show the slide. Never announce, guess or mention a winner's name yourself: you do not know the winners.
-                - When an announce tool succeeds it returns nothing; the announcement you then see in the conversation was spoken successfully. Never apologise for it, comment on it or repeat it.
+                - When an announce tool succeeds it returns nothing; the announcement you then see in the conversation (ending with the congratulations to the winner) is the approved text and was spoken successfully. The same goes for the welcome note. Never apologise for it, comment on it or repeat it.
                 - Some categories have several winners. If you asked whether to announce the next winner of a category and the host agrees, call announce_award with that same category.
                 - If the host asks for a category that isn't in the list, say so briefly and mention the closest category names.
                 - If a category is fully announced and the host asks for it again, confirm first; if they confirm, call announce_award with repeat set to true.
                 - Use show_slide when the host asks to show a particular slide (the title slide is slide one), and hide_slides when they ask to hide the slide or show you instead.
                 - Between awards, reply briefly and graciously if the host speaks to you, for example "Thank you!".
+                - If the host asks a general question (facts, news, sports scores, weather, a person or company), call web_search and answer in one or two short sentences. Never use web search to find award winners.
                 - Spell out numbers.
 
                 # Award categories, in presentation order
@@ -218,11 +430,17 @@ class CeremonyHost(Agent):
         )
         await self._send_slide(award.slide)
         # The approved text, exactly as written; applause must not cut it off.
-        handle = session.say(
-            self._program.settings.spoken(award.script), allow_interruptions=False
+        handle = self.say_parts(
+            session, [("en", self._program.settings.announcement(award))]
         )
         award.announced = True
+        self._run(self._applause_after(handle))
         return handle
+
+    async def _applause_after(self, handle: SpeechHandle) -> None:
+        """The on-screen audience stands up and claps once the announcement ends."""
+        await handle.wait_for_playout()
+        await self._send_status({"type": "applause"})
 
     async def _continue_category(
         self, session: AgentSession, first: SpeechHandle, rest: list[Award]
@@ -231,9 +449,28 @@ class CeremonyHost(Agent):
         previous = first
         for award in rest:
             await previous.wait_for_playout()
-            await asyncio.sleep(self._program.settings.pause_seconds)
+            await asyncio.sleep(
+                max(self._program.settings.pause_seconds, APPLAUSE_SECONDS)
+            )
+            # "please hold" pauses the remaining winners too.
+            await self._resumed.wait()
             previous = await self._speak(session, award)
         await self._refresh()
+
+    async def _ask_next_winner(
+        self, session: AgentSession, first: SpeechHandle, category: str, count: int
+    ) -> None:
+        """Ask mode: once the applause is over, ask whether to announce the next winner."""
+        await first.wait_for_playout()
+        await asyncio.sleep(APPLAUSE_SECONDS)
+        if self.on_hold:
+            return
+        more = "one more winner" if count == 1 else f"{count} more winners"
+        question = f"There is {more} for {category}. Shall I announce the next one?"
+        self._prompts.add(question)
+        session.say(question, allow_interruptions=False)
+        # The host's "yes" doesn't need the name again.
+        self._wake.extend()
 
     async def _announce(self, ctx: RunContext, category: str, repeat: bool) -> str:
         entries = self._program.entries(category)
@@ -249,17 +486,9 @@ class CeremonyHost(Agent):
         first = await self._speak(session, pending[0])
         rest = pending[1:]
         if rest and self._program.settings.multi_winner == "auto":
-            task = asyncio.create_task(self._continue_category(session, first, rest))
-            self._tasks.add(task)
-            task.add_done_callback(self._tasks.discard)
+            self._run(self._continue_category(session, first, rest))
         elif rest:
-            more = "one more winner" if len(rest) == 1 else f"{len(rest)} more winners"
-            session.say(
-                f"There is {more} for {category}. Shall I announce the next one?",
-                allow_interruptions=False,
-            )
-            # The host's "yes" doesn't need the name again.
-            self._wake.extend()
+            self._run(self._ask_next_winner(session, first, category, len(rest)))
         await self._refresh()
         # The announcement is the whole reply: don't let the model add anything.
         raise StopResponse()
@@ -283,12 +512,32 @@ class CeremonyHost(Agent):
         """Give the approved welcome note to the audience, word-for-word."""
         logger.info("welcome note")
         await self._send_view("tina")
-        ctx.session.say(
-            self._program.settings.spoken(self._program.settings.welcome_note),
-            allow_interruptions=False,
+        settings = self._program.settings
+        parts = await self.multilingual(
+            settings.welcome_note,
+            settings.welcome_languages,
+            settings.welcome_translations,
+            lambda text: text,
         )
+        self.say_parts(ctx.session, parts)
         # The welcome note is the whole reply.
         raise StopResponse()
+
+    @function_tool()
+    async def web_search(self, ctx: RunContext, query: str) -> str:
+        """Search the web for current information, e.g. news, facts, scores or weather.
+
+        Args:
+            query: The question or topic to search for.
+        """
+        logger.info("web_search: %s", query)
+        async with ctx.with_filler("Let me check that for you.", delay=1.5):
+            try:
+                result = await run_web_search(query, "English", self._usage)
+            except anthropic.APIError as e:
+                logger.warning("web_search failed: %s", e)
+                return "The search failed. Say so briefly."
+        return result.answer
 
     @function_tool()
     async def announce_next_award(self, ctx: RunContext) -> str:

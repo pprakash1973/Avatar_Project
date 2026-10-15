@@ -24,10 +24,11 @@ from livekit.agents import (
     function_tool,
     inference,
     llm,
+    room_io,
     stt,
     tts,
 )
-from livekit.plugins import anam, anthropic, cartesia, deepgram, simli
+from livekit.plugins import ai_coustics, anam, anthropic, cartesia, deepgram, simli
 from livekit.plugins.anthropic import llm as _anthropic_llm
 
 import files
@@ -105,6 +106,24 @@ def make_tts(language: str, voice: str = "") -> tts.TTS:
         model="sonic-3.6" if language == "ml" else "sonic-3",
         language=language,
         voice=VOICES.get(voice, TINA_VOICE_ID),
+    )
+
+
+def room_options(*, ceremony: bool) -> room_io.RoomOptions:
+    """Noise suppression on what Tina hears (ai-coustics, via LiveKit Cloud).
+
+    In a hall the "voice focus" model also removes background voices (audience
+    chatter, applause), keeping the main speaker near the microphone.
+    """
+    model = (
+        ai_coustics.EnhancerModel.QUAIL_VF_L
+        if ceremony
+        else ai_coustics.EnhancerModel.QUAIL_L
+    )
+    return room_io.RoomOptions(
+        audio_input=room_io.AudioInputOptions(
+            noise_cancellation=ai_coustics.audio_enhancement(model=model)
+        )
     )
 
 
@@ -539,6 +558,8 @@ async def run_ceremony(
     wake: WakeWord,
     record: dict[str, Any],
     started_at: float,
+    usage: HelperUsage,
+    voice: str,
 ) -> None:
     """Award ceremony: get the approved awards from the browser, then host."""
     loop = asyncio.get_running_loop()
@@ -575,17 +596,35 @@ async def run_ceremony(
     async def send_view(view: str) -> None:
         await send_ui(ctx.room, UI_STATUS_TOPIC, {"type": "view", "view": view})
 
+    async def send_status(status: dict[str, Any]) -> None:
+        await send_ui(ctx.room, UI_STATUS_TOPIC, status)
+
     host = CeremonyHost(
         program=program,
         llm_model=anthropic.LLM(model=MAIN_MODEL, parallel_tool_calls=False),
         send_slide=send_slide,
         send_view=send_view,
+        send_status=send_status,
+        make_tts=lambda language: make_tts(language, voice),
+        usage=usage,
         wake=wake,
     )
-    await session.start(agent=host, room=ctx.room)
-    # Greet the room as soon as Tina is on screen; the hall can't interrupt it.
-    greeting = program.settings.greeting_for(record.get("name", ""))
-    session.say(program.settings.spoken(greeting), allow_interruptions=False)
+    await session.start(
+        agent=host, room=ctx.room, room_options=room_options(ceremony=True)
+    )
+    # Greet the room as soon as Tina is on screen, in each chosen language; the hall
+    # can't interrupt it.
+    settings = program.settings
+    host_name = record.get("name", "")
+    host.say_parts(
+        session,
+        await host.multilingual(
+            settings.greeting,
+            settings.greeting_languages,
+            settings.greeting_translations,
+            lambda text: settings.greeting_for(host_name, text),
+        ),
+    )
     wake.extend()
     await send_ui(
         ctx.room,
@@ -688,7 +727,15 @@ async def entrypoint(ctx: JobContext) -> None:
         return
 
     if is_ceremony:
-        await run_ceremony(ctx, session, wake, record, started_at)
+        await run_ceremony(
+            ctx,
+            session,
+            wake,
+            record,
+            started_at,
+            usage,
+            attributes.get("voice", ""),
+        )
         return
 
     video = VideoWatcher(ctx.room)
@@ -706,7 +753,9 @@ async def entrypoint(ctx: JobContext) -> None:
         adapt_to_mood=adapt_to_mood,
         wake=wake,
     )
-    await session.start(agent=assistant, room=ctx.room)
+    await session.start(
+        agent=assistant, room=ctx.room, room_options=room_options(ceremony=False)
+    )
 
     file_reader = FileReader(
         session=session,

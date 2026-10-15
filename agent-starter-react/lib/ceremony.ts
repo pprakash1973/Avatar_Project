@@ -1,6 +1,7 @@
 // Award ceremony mode: shared types, defaults and on-device storage.
 // The award list and the slides stay on the host laptop; the list is sent to
 // Tina only when the ceremony starts.
+import type { LanguageCode } from '@/lib/agent-channels';
 
 export const CEREMONY_AWARDS_TOPIC = 'ceremony-awards';
 
@@ -21,9 +22,46 @@ export type CeremonySettings = {
   greeting: string;
   /** Read word-for-word when the host asks for the welcome note. */
   welcome_note: string;
+  /** Languages the greeting is spoken in, in order; English uses `greeting` itself. */
+  greeting_languages: LanguageCode[];
+  /** The greeting in the other languages; an empty one is translated when Tina joins. */
+  greeting_translations: Translations;
+  welcome_languages: LanguageCode[];
+  welcome_translations: Translations;
+  /** Say e.g. "Congratulations, Soumya!" after every winner's announcement. */
+  congratulate: boolean;
+  /** {winner} is replaced by the winner's name. */
+  congratulations: string;
+  /** A grey audience stands and claps on screen after each winner. */
+  celebrate: boolean;
+  /** Phrases the host can say (without "Tina") to control her. */
+  keywords: Keyword[];
   /** Written name -> how Tina should say it (speech only; slides keep the real spelling). */
   pronunciations: Pronunciation[];
+  /** When the settings were last saved (ms); the newer copy wins between devices. */
+  saved_at?: number;
 };
+
+export type Translations = Partial<Record<LanguageCode, string>>;
+
+export type KeywordAction = 'repeat' | 'hold' | 'continue';
+export type Keyword = { phrase: string; action: KeywordAction };
+
+export const KEYWORD_ACTIONS: { code: KeywordAction; label: string }[] = [
+  { code: 'repeat', label: 'Repeat the last announcement or sentence' },
+  { code: 'hold', label: 'Hold: wait silently until told to continue' },
+  { code: 'continue', label: 'Continue after a hold' },
+];
+
+/** What Tina says after a winner's announcement ('' when turned off or no winner). */
+export const congratulationsFor = (settings: CeremonySettings, winner: string) =>
+  settings.congratulate && winner.trim()
+    ? settings.congratulations.replaceAll('{winner}', winner.trim())
+    : '';
+
+/** An award's announcement as Tina says it, including the congratulations. */
+export const announcementFor = (settings: CeremonySettings, award: Award) =>
+  [award.script.trim(), congratulationsFor(settings, award.winner)].filter(Boolean).join(' ');
 
 export type Pronunciation = { written: string; spoken: string };
 
@@ -49,6 +87,20 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
     'Rewards and Recognition Ceremony. We sincerely thank our leaders for taking time out of their ' +
     'busy schedules to join us. Your presence and continued support make this occasion truly ' +
     'special. Let us celebrate excellence and achievement together!',
+  greeting_languages: ['en'],
+  greeting_translations: {},
+  welcome_languages: ['en'],
+  welcome_translations: {},
+  congratulate: true,
+  congratulations: 'Congratulations, {winner}!',
+  celebrate: true,
+  keywords: [
+    { phrase: 'please repeat', action: 'repeat' },
+    { phrase: 'repeat that', action: 'repeat' },
+    { phrase: 'please hold', action: 'hold' },
+    { phrase: 'hold on', action: 'hold' },
+    { phrase: 'continue', action: 'continue' },
+  ],
   pronunciations: [
     { written: 'Soumya', spoken: 'Sow-mya' },
     { written: 'Kalpalatha', spoken: 'Kalpa-latha' },
@@ -96,6 +148,37 @@ export function saveSettings(settings: CeremonySettings) {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   } catch {
     // Not persisted; still used for this ceremony.
+  }
+}
+
+/** Saves the settings on this laptop and on the server, so another laptop gets them too. */
+export async function saveSettingsEverywhere(
+  settings: CeremonySettings
+): Promise<CeremonySettings> {
+  const stamped = { ...settings, saved_at: Date.now() };
+  saveSettings(stamped);
+  const response = await fetch('/api/ceremony/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(stamped),
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return stamped;
+}
+
+/** The server copy of the settings, or null if there is none or it can't be reached. */
+export async function loadServerSettings(): Promise<CeremonySettings | null> {
+  try {
+    const response = await fetch('/api/ceremony/settings', { cache: 'no-store' });
+    if (!response.ok) {
+      return null;
+    }
+    const saved = (await response.json()) as Partial<CeremonySettings> | null;
+    return saved ? { ...DEFAULT_SETTINGS, ...saved } : null;
+  } catch {
+    return null;
   }
 }
 const DB_NAME = 'avatar-ceremony';

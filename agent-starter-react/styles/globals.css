@@ -124,3 +124,43 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Ceremony: the audience stands up and claps along the bottom (applause-crowd.tsx). */
+@keyframes crowd-rise {
+  0% { transform: translateY(100%); }
+  14% { transform: translateY(0); }
+  86% { transform: translateY(0); }
+  100% { transform: translateY(100%); }
+}
+@keyframes person-bob {
+  from { transform: translateY(0); }
+  to { transform: translateY(-5px); }
+}
+@keyframes clap-left {
+  from { transform: translateX(-6px); }
+  to { transform: translateX(1px); }
+}
+@keyframes clap-right {
+  from { transform: translateX(6px); }
+  to { transform: translateX(-1px); }
+}
+.applause-crowd { animation: crowd-rise 5s ease-in-out forwards; }
+.applause-person { animation: person-bob calc(var(--clap-speed) * 2) ease-in-out infinite alternate; }
+.applause-arm-left { animation: clap-left var(--clap-speed) ease-in-out infinite alternate; }
+.applause-arm-right { animation: clap-right var(--clap-speed) ease-in-out infinite alternate; }
+
+/* Ceremony: slow stage lights behind Tina, and a glow while she speaks. */
+@keyframes stage-light {
+  0% { transform: translate(-10%, 0) scale(1); }
+  50% { transform: translate(10%, -6%) scale(1.15); }
+  100% { transform: translate(-10%, 0) scale(1); }
+}
+@keyframes speaking-glow {
+  from { box-shadow: 0 0 30px 4px rgb(251 191 36 / 0.25); }
+  to { box-shadow: 0 0 70px 14px rgb(251 191 36 / 0.5); }
+}
+.stage-light { animation: stage-light 14s ease-in-out infinite; }
+.speaking-glow { animation: speaking-glow 0.9s ease-in-out infinite alternate; }
+@media (prefers-reduced-motion: reduce) {
+  .stage-light, .speaking-glow, .applause-person, .applause-arm-left, .applause-arm-right { animation: none; }
+}

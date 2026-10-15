@@ -13,7 +13,14 @@ import { Toaster } from '@/components/ui/sonner';
 import { toastAlert, useAgentErrors } from '@/hooks/useAgentErrors';
 import { useCallDiagnostics } from '@/hooks/useCallDiagnostics';
 import { DEFAULT_VOICE, VOICES, type VoiceCode } from '@/lib/agent-channels';
-import { type Award, type CeremonySettings, DEFAULT_SETTINGS, loadSettings } from '@/lib/ceremony';
+import {
+  type Award,
+  type CeremonySettings,
+  DEFAULT_SETTINGS,
+  loadServerSettings,
+  loadSettings,
+  saveSettings,
+} from '@/lib/ceremony';
 import type { PDFDocumentProxy } from '@/lib/pdf';
 import {
   getSavedMicrophoneId,
@@ -45,8 +52,16 @@ export function CeremonyApp({ agentName }: { agentName?: string }) {
     if (VOICES.some((v) => v.code === saved)) {
       setVoice(saved as VoiceCode);
     }
-    setSettings(loadSettings());
+    const local = loadSettings();
+    setSettings(local);
     setHostName(getSavedName());
+    // Settings saved on another laptop (e.g. during a dry run) win if they are newer.
+    void loadServerSettings().then((server) => {
+      if (server && (server.saved_at ?? 0) > (local.saved_at ?? 0)) {
+        setSettings(server);
+        saveSettings(server);
+      }
+    });
   }, []);
   const participantAttributes = useMemo(() => ({ ...CEREMONY_ATTRIBUTES, voice }), [voice]);
   const session = useSession(tokenSource, {

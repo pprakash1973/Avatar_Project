@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import {
+  CheckIcon,
   CircleNotchIcon,
   PlayIcon,
   PlusIcon,
@@ -11,18 +12,22 @@ import {
 import { MicrophoneSelect } from '@/components/app/microphone-select';
 import { VoiceSelect } from '@/components/app/voice-select';
 import { Button } from '@/components/ui/button';
-import type { VoiceCode } from '@/lib/agent-channels';
+import { LANGUAGES, type LanguageCode, type VoiceCode } from '@/lib/agent-channels';
 import {
   type Award,
   type CeremonySettings,
   type ExtractedAward,
+  KEYWORD_ACTIONS,
+  type KeywordAction,
+  type Translations,
+  announcementFor,
   defaultScript,
   greetingFor,
   loadAwards,
   loadDeck,
   saveAwards,
   saveDeck,
-  saveSettings,
+  saveSettingsEverywhere,
   spokenText,
 } from '@/lib/ceremony';
 import { type PDFDocumentProxy, openPdf, pageImage, pageText } from '@/lib/pdf';
@@ -67,22 +72,58 @@ export function CeremonySetup({
   onStart,
   isStarting,
 }: CeremonySetupProps) {
+  // Edits stay a draft until "Save settings"; starting the ceremony also saves them.
+  const [isDirty, setIsDirty] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'local'>('idle');
+  const [saveError, setSaveError] = useState('');
   const updateSettings = (patch: Partial<CeremonySettings>) => {
-    const next = { ...settings, ...patch };
-    onSettingsChange(next);
-    saveSettings(next);
+    onSettingsChange({ ...settings, ...patch });
+    setIsDirty(true);
+    setSaveState('idle');
   };
+  const save = async () => {
+    setSaveState('saving');
+    setSaveError('');
+    try {
+      onSettingsChange(await saveSettingsEverywhere(settings));
+      setSaveState('saved');
+    } catch (e) {
+      // saveSettingsEverywhere keeps the laptop copy even if the server is unreachable.
+      setSaveState('local');
+      setSaveError(e instanceof Error ? e.message : String(e));
+    }
+    setIsDirty(false);
+  };
+  const start = () => {
+    if (isDirty) {
+      void save();
+    }
+    onStart();
+  };
+
+  useEffect(() => {
+    if (!isDirty) {
+      return;
+    }
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [isDirty]);
 
   // Plays text in Tina's voice (with the pronunciation list applied) on the chosen speaker.
   const [speaking, setSpeaking] = useState<string | null>(null);
-  const hear = async (key: string, text: string) => {
+  const hear = async (key: string, text: string, language: LanguageCode = 'en') => {
     setSpeaking(key);
     setError('');
     try {
       const response = await fetch('/api/ceremony/speak', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: spokenText(text, settings.pronunciations), voice }),
+        body: JSON.stringify({
+          text: spokenText(text, settings.pronunciations),
+          voice,
+          language,
+        }),
       });
       if (!response.ok) {
         throw new Error(await response.text());
@@ -109,6 +150,11 @@ export function CeremonySetup({
       pronunciations: settings.pronunciations.map((p, i) =>
         i === index ? { ...p, [key]: value } : p
       ),
+    });
+
+  const setKeyword = (index: number, patch: { phrase?: string; action?: KeywordAction }) =>
+    updateSettings({
+      keywords: settings.keywords.map((k, i) => (i === index ? { ...k, ...patch } : k)),
     });
 
   const [thumbnails, setThumbnails] = useState<string[]>([]);
@@ -322,7 +368,7 @@ export function CeremonySetup({
                 </label>
                 <button
                   type="button"
-                  onClick={() => void hear(`award-${index}`, award.script)}
+                  onClick={() => void hear(`award-${index}`, announcementFor(settings, award))}
                   disabled={!award.script || speaking !== null}
                   className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs md:col-span-3"
                 >
@@ -409,6 +455,18 @@ export function CeremonySetup({
             )}
             Hear the greeting
           </button>
+          <SpeechLanguages
+            id="greeting"
+            source={settings.greeting}
+            languages={settings.greeting_languages}
+            translations={settings.greeting_translations}
+            onChange={(greeting_languages, greeting_translations) =>
+              updateSettings({ greeting_languages, greeting_translations })
+            }
+            preview={(text) => greetingFor(text, hostName)}
+            hear={hear}
+            speaking={speaking}
+          />
           <label className="text-muted-foreground text-xs">
             Welcome note (read word-for-word when the host says, e.g., &ldquo;Tina, please give the
             welcome note&rdquo;)
@@ -432,6 +490,47 @@ export function CeremonySetup({
             )}
             Hear the welcome note
           </button>
+          <SpeechLanguages
+            id="welcome"
+            source={settings.welcome_note}
+            languages={settings.welcome_languages}
+            translations={settings.welcome_translations}
+            onChange={(welcome_languages, welcome_translations) =>
+              updateSettings({ welcome_languages, welcome_translations })
+            }
+            preview={(text) => text}
+            hear={hear}
+            speaking={speaking}
+          />
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.congratulate}
+                onChange={(e) => updateSettings({ congratulate: e.target.checked })}
+              />
+              Congratulate each winner after their announcement
+            </label>
+            <input
+              aria-label="Congratulations text"
+              className={inputClassName}
+              disabled={!settings.congratulate}
+              value={settings.congratulations}
+              onChange={(e) => updateSettings({ congratulations: e.target.value })}
+            />
+            <span className="text-muted-foreground text-xs">
+              {'{winner}'} is replaced by the winner&rsquo;s name, e.g. &ldquo;Congratulations,
+              Soumya!&rdquo;
+            </span>
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={settings.celebrate}
+              onChange={(e) => updateSettings({ celebrate: e.target.checked })}
+            />
+            Standing ovation on screen after each winner (grey audience claps for five seconds)
+          </label>
           <fieldset className="text-sm">
             <legend className="text-muted-foreground mb-1 text-xs">
               When a category has several winners
@@ -472,7 +571,62 @@ export function CeremonySetup({
       </section>
 
       <section className="mt-4 rounded-xl border p-4">
-        <h2 className="text-sm font-semibold">4. Name pronunciations</h2>
+        <h2 className="text-sm font-semibold">4. Voice keywords</h2>
+        <p className="text-muted-foreground mt-1 text-xs">
+          The host can say these phrases at any time, without calling &ldquo;Tina&rdquo;. While on
+          hold, Tina ignores everything except a &ldquo;continue&rdquo; phrase.
+        </p>
+        <div className="mt-3 flex flex-col gap-2">
+          {settings.keywords.map((k, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <input
+                aria-label="Phrase"
+                placeholder="e.g. please repeat"
+                className={inputClassName}
+                value={k.phrase}
+                onChange={(e) => setKeyword(index, { phrase: e.target.value })}
+              />
+              <select
+                aria-label="Action"
+                className={inputClassName}
+                value={k.action}
+                onChange={(e) => setKeyword(index, { action: e.target.value as KeywordAction })}
+              >
+                {KEYWORD_ACTIONS.map((a) => (
+                  <option key={a.code} value={a.code}>
+                    {a.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                aria-label={`Remove ${k.phrase || 'keyword'}`}
+                onClick={() =>
+                  updateSettings({ keywords: settings.keywords.filter((_, i) => i !== index) })
+                }
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <TrashIcon className="size-5" />
+              </button>
+            </div>
+          ))}
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-3"
+          onClick={() =>
+            updateSettings({
+              keywords: [...settings.keywords, { phrase: '', action: 'repeat' }],
+            })
+          }
+        >
+          <PlusIcon /> Add keyword
+        </Button>
+      </section>
+
+      <section className="mt-4 rounded-xl border p-4">
+        <h2 className="text-sm font-semibold">5. Name pronunciations</h2>
         <p className="text-muted-foreground mt-1 text-xs">
           Wherever a name below appears in an announcement or the greeting, Tina says it the way you
           write it on the right. Slides keep the real spelling. Use hyphens or simple sounds, e.g.
@@ -539,17 +693,41 @@ export function CeremonySetup({
       </section>
 
       <section className="mt-4 rounded-xl border p-4">
-        <h2 className="text-sm font-semibold">5. Hall audio</h2>
+        <h2 className="text-sm font-semibold">6. Hall audio</h2>
         <p className="text-muted-foreground mt-1 mb-3 text-xs">
           Pick the host microphone and the speaker / PA output, and test them.
         </p>
         <MicrophoneSelect disabled={isStarting} />
       </section>
 
+      <div className="bg-background/95 sticky bottom-0 z-10 mt-4 flex flex-wrap items-center gap-3 border-t py-3 backdrop-blur">
+        <Button onClick={() => void save()} disabled={saveState === 'saving'} variant="outline">
+          {saveState === 'saving' ? (
+            <CircleNotchIcon className="size-4 animate-spin" />
+          ) : (
+            <CheckIcon className="size-4" />
+          )}
+          Save settings
+        </Button>
+        <span className="text-muted-foreground text-xs" role="status">
+          {saveState === 'saving'
+            ? 'Saving…'
+            : isDirty
+              ? 'Unsaved changes'
+              : saveState === 'saved'
+                ? 'Saved on this laptop and online (other laptops get it too)'
+                : saveState === 'local'
+                  ? `Saved on this laptop only: ${saveError}`
+                  : settings.saved_at
+                    ? `Last saved ${new Date(settings.saved_at).toLocaleString()}`
+                    : 'Not saved yet'}
+        </span>
+      </div>
+
       <div className="mt-6 flex flex-col items-center gap-2">
         <Button
           size="lg"
-          onClick={onStart}
+          onClick={start}
           disabled={!ready || isStarting || isBusy}
           className="w-72 rounded-full font-mono text-xs font-bold tracking-wider uppercase"
         >
@@ -567,6 +745,130 @@ export function CeremonySetup({
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+interface SpeechLanguagesProps {
+  id: string;
+  /** The English text as written, sent for translation. */
+  source: string;
+  languages: LanguageCode[];
+  translations: Translations;
+  onChange: (languages: LanguageCode[], translations: Translations) => void;
+  /** The text to play for a translation's preview (placeholders filled in). */
+  preview: (text: string) => string;
+  hear: (key: string, text: string, language?: LanguageCode) => Promise<void>;
+  speaking: string | null;
+}
+
+/** Pick the languages Tina speaks a text in, and review each translation. */
+function SpeechLanguages({
+  id,
+  source,
+  languages,
+  translations,
+  onChange,
+  preview,
+  hear,
+  speaking,
+}: SpeechLanguagesProps) {
+  const [isTranslating, setIsTranslating] = useState(false);
+  const [error, setError] = useState('');
+  const others = languages.filter((code) => code !== 'en');
+
+  const toggle = (code: LanguageCode, on: boolean) => {
+    // Keep the order of the language list, so English comes first.
+    const next = LANGUAGES.map((l) => l.code).filter((c) =>
+      c === code ? on : languages.includes(c)
+    );
+    onChange(next.length ? next : ['en'], translations);
+  };
+
+  const translate = async (codes: LanguageCode[]) => {
+    setIsTranslating(true);
+    setError('');
+    try {
+      const response = await fetch('/api/ceremony/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: source, languages: codes }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      onChange(languages, { ...translations, ...((await response.json()) as Translations) });
+    } catch (e) {
+      setError(`Could not translate: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setIsTranslating(false);
+    }
+  };
+
+  return (
+    <div className="-mt-1 flex flex-col gap-2 rounded-md border border-dashed p-2">
+      <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+        Speak in:
+        {LANGUAGES.map((l) => (
+          <label key={l.code} className="text-foreground flex items-center gap-1 text-sm">
+            <input
+              type="checkbox"
+              checked={languages.includes(l.code)}
+              onChange={(e) => toggle(l.code, e.target.checked)}
+            />
+            {l.label}
+          </label>
+        ))}
+      </div>
+      {others.length > 0 && (
+        <>
+          <p className="text-muted-foreground text-xs">
+            Tina says it in each ticked language, in this order. Check the translations; an empty
+            one is translated automatically when Tina speaks.
+          </p>
+          {others.map((code) => (
+            <div key={code} className="flex flex-col gap-1">
+              <label className="text-muted-foreground text-xs">
+                {LANGUAGES.find((l) => l.code === code)?.label}
+                <textarea
+                  rows={2}
+                  className={inputClassName}
+                  value={translations[code] ?? ''}
+                  onChange={(e) => onChange(languages, { ...translations, [code]: e.target.value })}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void hear(`${id}-${code}`, preview(translations[code] ?? ''), code)}
+                disabled={!translations[code]?.trim() || speaking !== null}
+                className="text-muted-foreground hover:text-foreground flex items-center gap-1 self-start text-xs"
+              >
+                {speaking === `${id}-${code}` ? (
+                  <CircleNotchIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <SpeakerHighIcon className="size-3.5" />
+                )}
+                Hear it
+              </button>
+            </div>
+          ))}
+          <Button
+            variant="outline"
+            size="sm"
+            className="self-start"
+            disabled={isTranslating || !source.trim()}
+            onClick={() => void translate(others)}
+          >
+            {isTranslating && <CircleNotchIcon className="size-4 animate-spin" />}
+            Translate from English
+          </Button>
+          {error && (
+            <p role="alert" className="text-destructive text-xs">
+              {error}
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }

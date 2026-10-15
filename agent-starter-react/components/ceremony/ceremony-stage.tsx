@@ -14,6 +14,7 @@ import {
   CircleNotchIcon,
   StopIcon,
 } from '@phosphor-icons/react/dist/ssr';
+import { APPLAUSE_MS, ApplauseCrowd } from '@/components/ceremony/applause-crowd';
 import { Button } from '@/components/ui/button';
 import { toastAlert } from '@/hooks/useAgentErrors';
 import { UI_STATUS_TOPIC } from '@/lib/agent-channels';
@@ -109,6 +110,11 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   // Corner for Tina's small window over slides; C moves it if it covers a face or text.
   const [corner, setCorner] = useState(0);
   const [slideShownAt, setSlideShownAt] = useState(0);
+  // Start time of the current standing ovation (0: none).
+  const [applauseAt, setApplauseAt] = useState(0);
+  const [onHold, setOnHold] = useState(false);
+  const celebrateRef = useRef(settings.celebrate);
+  celebrateRef.current = settings.celebrate;
   const programRef = useRef({ awards, settings });
   programRef.current = { awards, settings };
 
@@ -140,6 +146,14 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
     return () => clearTimeout(timer);
   }, [view, slideShownAt]);
 
+  useEffect(() => {
+    if (!applauseAt) {
+      return;
+    }
+    const timer = setTimeout(() => setApplauseAt(0), APPLAUSE_MS);
+    return () => clearTimeout(timer);
+  }, [applauseAt]);
+
   // Tina asks for the award list when she's ready, and tells us which slide to show.
   useEffect(() => {
     room.registerTextStreamHandler(UI_STATUS_TOPIC, async (reader) => {
@@ -159,6 +173,12 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           } else {
             showSlide();
           }
+        } else if (status.type === 'applause') {
+          if (celebrateRef.current) {
+            setApplauseAt(Date.now());
+          }
+        } else if (status.type === 'hold') {
+          setOnHold(Boolean(status.on));
         } else if (status.type === 'busy') {
           toastAlert({
             title: 'The avatar is busy or unavailable',
@@ -196,6 +216,8 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         setCorner((c) => (c + 1) % CORNERS.length);
       } else if (e.key.toLowerCase() === 't') {
         setView('tina');
+      } else if (e.key.toLowerCase() === 'a') {
+        setApplauseAt(Date.now());
       } else if (e.key.toLowerCase() === 'f') {
         void (document.fullscreenElement
           ? document.exitFullscreen()
@@ -215,18 +237,28 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
       : (STATE_LABELS[agent.state] ?? 'Tina is ready');
 
   return (
-    <div className="fixed inset-0 z-40 bg-black">
+    <div className="fixed inset-0 z-40 overflow-hidden bg-black">
+      {view === 'tina' && (
+        // Slow, soft stage lights behind Tina.
+        <div aria-hidden className="pointer-events-none absolute inset-0 opacity-60">
+          <div className="stage-light absolute -top-1/4 -left-1/4 size-[70vmax] rounded-full bg-[radial-gradient(circle,rgb(168_85_247/0.35),transparent_60%)]" />
+          <div
+            className="stage-light absolute -right-1/4 -bottom-1/4 size-[70vmax] rounded-full bg-[radial-gradient(circle,rgb(59_130_246/0.3),transparent_60%)]"
+            style={{ animationDelay: '-7s' }}
+          />
+        </div>
+      )}
       <div className={view === 'slide' ? 'size-full' : 'hidden'}>
         <SlideCanvas deck={deck} slide={slide} />
       </div>
 
       {videoTrack && (
         <div
-          className={
+          className={`${
             view === 'slide'
               ? `absolute ${CORNERS[corner]} w-[13vw] min-w-28 overflow-hidden rounded-lg shadow-2xl ring-1 ring-white/20 transition-all duration-500`
               : 'absolute top-1/2 left-1/2 aspect-square h-[72vh] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl shadow-2xl ring-1 ring-white/20 transition-all duration-500'
-          }
+          } ${agent.state === 'speaking' ? 'speaking-glow ring-amber-300/60' : ''}`}
         >
           <VideoTrack trackRef={videoTrack} className="aspect-square size-full object-cover" />
         </div>
@@ -235,7 +267,10 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
       <div className="absolute top-3 left-3 rounded-full bg-black/60 px-3 py-1 text-xs text-white/90">
         {statusText} ·{' '}
         {view === 'slide' ? `Slide ${slide}/${deck.numPages}` : 'Tina view (S: slide)'}
+        {onHold && ' · On hold (say “continue”)'}
       </div>
+
+      {applauseAt > 0 && <ApplauseCrowd key={applauseAt} sound />}
 
       {/* Operator controls: faint until hovered, so they don't distract the audience. */}
       <div className="absolute bottom-4 left-4 flex gap-2 opacity-20 transition-opacity focus-within:opacity-100 hover:opacity-100">

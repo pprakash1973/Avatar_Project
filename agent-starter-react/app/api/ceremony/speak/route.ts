@@ -19,7 +19,12 @@ export async function POST(req: Request) {
   if (!apiKey) {
     return new NextResponse('CARTESIA_API_KEY is not configured.', { status: 503 });
   }
-  const { text, voice } = (await req.json()) as { text?: string; voice?: string };
+  const { text, voice, language } = (await req.json()) as {
+    text?: string;
+    voice?: string;
+    language?: string;
+  };
+  const lang = ['en', 'hi', 'ta', 'ml'].includes(language ?? '') ? language! : 'en';
   if (!text?.trim() || text.length > MAX_CHARS) {
     return new NextResponse(`Text must be 1-${MAX_CHARS} characters.`, { status: 400 });
   }
@@ -32,10 +37,11 @@ export async function POST(req: Request) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model_id: 'sonic-3',
+      // Malayalam needs Sonic 3.6, as in make_tts in the agent.
+      model_id: lang === 'ml' ? 'sonic-3.6' : 'sonic-3',
       transcript: text,
       voice: { mode: 'id', id: VOICE_IDS[voice ?? ''] ?? VOICE_IDS.priya },
-      language: 'en',
+      language: lang,
       output_format: { container: 'mp3', sample_rate: 44100, bit_rate: 96000 },
     }),
   });
