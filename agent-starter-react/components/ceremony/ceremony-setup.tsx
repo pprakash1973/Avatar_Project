@@ -442,7 +442,8 @@ export function CeremonySetup({
             disabled={isStarting}
           />
           <label className="text-muted-foreground text-xs">
-            Host name (Tina smiles silently until the host says “Hello Tina”, then greets them by name)
+            Host name (Tina smiles silently until the host says “Hello Tina”, then greets them by
+            name)
             <input
               className={inputClassName}
               value={hostName}
