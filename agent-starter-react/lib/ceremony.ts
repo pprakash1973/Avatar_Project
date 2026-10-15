@@ -32,7 +32,9 @@ export type CeremonySettings = {
   congratulate: boolean;
   /** {winner} is replaced by the winner's name. */
   congratulations: string;
-  /** A grey audience stands and claps on screen after each winner. */
+  /** How Tina carries herself: a polished host (default) or a lively MC. */
+  style: 'professional' | 'lively';
+  /** Applause after each winner (plus the ovation photo, if one was uploaded). */
   celebrate: boolean;
   /** Phrases the host can say (without "Tina") to control her. */
   keywords: Keyword[];
@@ -93,6 +95,7 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   welcome_translations: {},
   congratulate: true,
   congratulations: 'Congratulations, {winner}!',
+  style: 'professional',
   celebrate: true,
   keywords: [
     { phrase: 'please repeat', action: 'repeat' },
@@ -227,10 +230,39 @@ export async function saveDeck(file: Blob): Promise<void> {
 }
 
 export async function loadDeck(): Promise<Blob | null> {
+  return loadFile(PDF_KEY);
+}
+
+const OVATION_KEY = 'ovation';
+
+/** The optional audience photo shown during the applause; null removes it. */
+export async function saveOvationPhoto(file: Blob | null): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      if (file) {
+        tx.objectStore(STORE).put(file, OVATION_KEY);
+      } else {
+        tx.objectStore(STORE).delete(OVATION_KEY);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Storage unavailable: the photo must be re-uploaded after a reload.
+  }
+}
+
+export async function loadOvationPhoto(): Promise<Blob | null> {
+  return loadFile(OVATION_KEY);
+}
+
+async function loadFile(key: string): Promise<Blob | null> {
   try {
     const db = await openDb();
     return await new Promise((resolve, reject) => {
-      const request = db.transaction(STORE).objectStore(STORE).get(PDF_KEY);
+      const request = db.transaction(STORE).objectStore(STORE).get(key);
       request.onsuccess = () => resolve((request.result as Blob | undefined) ?? null);
       request.onerror = () => reject(request.error);
     });

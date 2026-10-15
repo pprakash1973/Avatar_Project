@@ -18,7 +18,12 @@ import { APPLAUSE_MS, ApplauseCrowd } from '@/components/ceremony/applause-crowd
 import { Button } from '@/components/ui/button';
 import { toastAlert } from '@/hooks/useAgentErrors';
 import { UI_STATUS_TOPIC } from '@/lib/agent-channels';
-import { type Award, CEREMONY_AWARDS_TOPIC, type CeremonySettings } from '@/lib/ceremony';
+import {
+  type Award,
+  CEREMONY_AWARDS_TOPIC,
+  type CeremonySettings,
+  loadOvationPhoto,
+} from '@/lib/ceremony';
 import { type PDFDocumentProxy, renderPage } from '@/lib/pdf';
 
 function SlideCanvas({ deck, slide }: { deck: PDFDocumentProxy; slide: number }) {
@@ -113,6 +118,21 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   // Start time of the current standing ovation (0: none).
   const [applauseAt, setApplauseAt] = useState(0);
   const [onHold, setOnHold] = useState(false);
+  const [ovationUrl, setOvationUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let url: string | null = null;
+    void loadOvationPhoto().then((blob) => {
+      if (blob) {
+        url = URL.createObjectURL(blob);
+        setOvationUrl(url);
+      }
+    });
+    return () => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, []);
   const celebrateRef = useRef(settings.celebrate);
   celebrateRef.current = settings.celebrate;
   const programRef = useRef({ awards, settings });
@@ -258,7 +278,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
             view === 'slide'
               ? `absolute ${CORNERS[corner]} w-[13vw] min-w-28 overflow-hidden rounded-lg shadow-2xl ring-1 ring-white/20 transition-all duration-500`
               : 'absolute top-1/2 left-1/2 aspect-square h-[72vh] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl shadow-2xl ring-1 ring-white/20 transition-all duration-500'
-          } ${agent.state === 'speaking' ? 'speaking-glow ring-amber-300/60' : ''}`}
+          } ${agent.state === 'speaking' && settings.style === 'lively' ? 'speaking-glow ring-amber-300/60' : ''}`}
         >
           <VideoTrack trackRef={videoTrack} className="aspect-square size-full object-cover" />
         </div>
@@ -270,7 +290,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         {onHold && ' · On hold (say “continue”)'}
       </div>
 
-      {applauseAt > 0 && <ApplauseCrowd key={applauseAt} sound />}
+      {applauseAt > 0 && <ApplauseCrowd key={applauseAt} photoUrl={ovationUrl} />}
 
       {/* Operator controls: faint until hovered, so they don't distract the audience. */}
       <div className="absolute bottom-4 left-4 flex gap-2 opacity-20 transition-opacity focus-within:opacity-100 hover:opacity-100">

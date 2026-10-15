@@ -96,6 +96,8 @@ class CeremonySettings:
     welcome_languages: list[str] = field(default_factory=lambda: ["en"])
     welcome_translations: dict[str, str] = field(default_factory=dict)
     congratulate: bool = True
+    # How Tina carries herself: a polished "professional" host, or a "lively" MC.
+    style: Literal["professional", "lively"] = "professional"
     congratulations: str = DEFAULT_CONGRATULATIONS
     # Phrases the host can say without "Tina", e.g. "please hold".
     keywords: list[tuple[str, KeywordAction]] = field(
@@ -160,6 +162,7 @@ class CeremonyProgram:
             welcome_languages=_languages(raw.get("welcome_languages")),
             welcome_translations=_translations(raw.get("welcome_translations")),
             congratulate=raw.get("congratulate", True) is not False,
+            style="lively" if raw.get("style") == "lively" else "professional",
             congratulations=str(
                 raw.get("congratulations") or DEFAULT_CONGRATULATIONS
             ).strip(),
@@ -222,6 +225,19 @@ class CeremonyProgram:
         return None
 
 
+HOST_STYLES = {
+    "professional": (
+        "Your style is that of a polished, professional award-ceremony host: gracious, "
+        "articulate and composed. Be warm and celebratory, but always dignified and formal; "
+        "no slang, jokes or hype."
+    ),
+    "lively": (
+        "Your style is that of a seasoned, charismatic event MC, like an expert DJ working "
+        "the room: upbeat, celebratory and full of energy, with short, punchy lines that get "
+        "the audience cheering. Stay gracious and respectful; never joke about the winners or "
+        "the leaders."
+    ),
+}
 HOLD_REPLY = "Sure, I'll wait."
 RESUME_REPLY = "Thank you! Let's continue."
 NOTHING_TO_REPEAT = "There's nothing to repeat yet."
@@ -398,7 +414,7 @@ class CeremonyHost(Agent):
                 """\
                 You are Tina, the AI co-host at a live award ceremony, speaking to the host and the audience through a microphone and speakers. Speak warm, clear English.
 
-                Your style is that of a seasoned, charismatic event MC, like an expert DJ working the room: upbeat, celebratory and full of energy, with short, punchy lines that get the audience cheering. Stay gracious and respectful; never joke about the winners or the leaders.
+                {style}
 
                 # How to behave on stage
 
@@ -416,7 +432,7 @@ class CeremonyHost(Agent):
 
                 # Award categories, in presentation order
                 """
-            )
+            ).replace("{style}", HOST_STYLES[self._program.settings.style])
             + categories
             + "\n"
         )

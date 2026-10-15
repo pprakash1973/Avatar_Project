@@ -25,8 +25,10 @@ import {
   greetingFor,
   loadAwards,
   loadDeck,
+  loadOvationPhoto,
   saveAwards,
   saveDeck,
+  saveOvationPhoto,
   saveSettingsEverywhere,
   spokenText,
 } from '@/lib/ceremony';
@@ -156,6 +158,19 @@ export function CeremonySetup({
     updateSettings({
       keywords: settings.keywords.map((k, i) => (i === index ? { ...k, ...patch } : k)),
     });
+
+  // Optional audience photo for the applause, kept on this laptop.
+  const [ovationUrl, setOvationUrl] = useState<string | null>(null);
+  const showOvation = (blob: Blob | null) =>
+    setOvationUrl((old) => {
+      if (old) {
+        URL.revokeObjectURL(old);
+      }
+      return blob ? URL.createObjectURL(blob) : null;
+    });
+  useEffect(() => {
+    void loadOvationPhoto().then(showOvation);
+  }, []);
 
   const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [status, setStatus] = useState('');
@@ -523,14 +538,77 @@ export function CeremonySetup({
               Soumya!&rdquo;
             </span>
           </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={settings.celebrate}
-              onChange={(e) => updateSettings({ celebrate: e.target.checked })}
-            />
-            Standing ovation on screen after each winner (grey audience claps for five seconds)
-          </label>
+          <div className="flex flex-col gap-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.celebrate}
+                onChange={(e) => updateSettings({ celebrate: e.target.checked })}
+              />
+              Five seconds of applause after each winner
+            </label>
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              {ovationUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={ovationUrl} alt="Ovation photo" className="h-16 rounded border" />
+              )}
+              <label className="border-input hover:bg-accent cursor-pointer rounded-full border px-3 py-1.5 font-medium">
+                {ovationUrl ? 'Replace ovation photo' : 'Add ovation photo (optional)'}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (file) {
+                      void saveOvationPhoto(file);
+                      showOvation(file);
+                    }
+                  }}
+                />
+              </label>
+              {ovationUrl && (
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-destructive"
+                  onClick={() => {
+                    void saveOvationPhoto(null);
+                    showOvation(null);
+                  }}
+                >
+                  Remove
+                </button>
+              )}
+              <span className="text-muted-foreground">
+                A photo of an audience applauding (one you have the rights to) rises along the
+                bottom of the screen during the applause. Wide photos work best.
+              </span>
+            </div>
+          </div>
+          <fieldset className="text-sm">
+            <legend className="text-muted-foreground mb-1 text-xs">
+              Tina&rsquo;s hosting style
+            </legend>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="host-style"
+                checked={settings.style === 'professional'}
+                onChange={() => updateSettings({ style: 'professional' })}
+              />
+              Professional: polished, gracious and formal (recommended)
+            </label>
+            <label className="mt-1 flex items-center gap-2">
+              <input
+                type="radio"
+                name="host-style"
+                checked={settings.style === 'lively'}
+                onChange={() => updateSettings({ style: 'lively' })}
+              />
+              Lively MC: upbeat and energetic
+            </label>
+          </fieldset>
           <fieldset className="text-sm">
             <legend className="text-muted-foreground mb-1 text-xs">
               When a category has several winners
