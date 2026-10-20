@@ -74,6 +74,8 @@ FILE_UPLOAD_TOPIC = "file-upload"
 UI_CARD_TOPIC = "ui-card"
 UI_STATUS_TOPIC = "ui-status"
 CEREMONY_AWARDS_TOPIC = "ceremony-awards"
+# The stage tells Tina about media it plays ({"type": "media", ...}).
+CEREMONY_EVENTS_TOPIC = "ceremony-events"
 
 # Tina's voices (Cartesia). The browser picks one by key; Priya, an Indian-English
 # female voice, is the default (TINA_VOICE_ID overrides the default).
@@ -614,8 +616,13 @@ async def run_ceremony(
         program = CeremonyProgram()
     logger.info("ceremony with %d awards", len(program.awards))
 
-    async def send_slide(slide: int) -> None:
-        await send_ui(ctx.room, UI_STATUS_TOPIC, {"type": "slide", "slide": slide})
+    async def send_slide(slide: int, hidden: bool = False, title: str = "") -> None:
+        # hidden: blur the slide until the winner's name is revealed.
+        await send_ui(
+            ctx.room,
+            UI_STATUS_TOPIC,
+            {"type": "slide", "slide": slide, "hidden": hidden, "title": title},
+        )
 
     async def send_view(view: str) -> None:
         await send_ui(ctx.room, UI_STATUS_TOPIC, {"type": "view", "view": view})
@@ -633,6 +640,21 @@ async def run_ceremony(
         usage=usage,
         wake=wake,
     )
+
+    async def read_event(reader: rtc.TextStreamReader) -> None:
+        try:
+            event = json.loads(await reader.read_all())
+        except ValueError:
+            return
+        if event.get("type") == "media":
+            host.media_playing(str(event.get("kind")), bool(event.get("playing")))
+
+    def on_event(reader: rtc.TextStreamReader, participant_identity: str) -> None:
+        task = asyncio.create_task(read_event(reader))
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    ctx.room.register_text_stream_handler(CEREMONY_EVENTS_TOPIC, on_event)
     await session.start(
         agent=host, room=ctx.room, room_options=room_options(ceremony=True)
     )

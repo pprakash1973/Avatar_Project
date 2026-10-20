@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CheckIcon,
   CircleNotchIcon,
@@ -11,6 +11,7 @@ import {
 } from '@phosphor-icons/react/dist/ssr';
 import { MicrophoneSelect } from '@/components/app/microphone-select';
 import { VoiceSelect } from '@/components/app/voice-select';
+import { MusicCard } from '@/components/ceremony/music-card';
 import { Button } from '@/components/ui/button';
 import { LANGUAGES, type LanguageCode, type VoiceCode } from '@/lib/agent-channels';
 import {
@@ -22,15 +23,20 @@ import {
   type KeywordAction,
   type Translations,
   announcementFor,
+  announcementParts,
   defaultScript,
   greetingFor,
   loadAwards,
   loadDeck,
   loadOvationPhoto,
+  loadWalkupMusic,
+  musicKey,
+  parseMusicUrl,
   saveAwards,
   saveDeck,
   saveOvationPhoto,
   saveSettingsEverywhere,
+  saveWalkupMusic,
   spokenText,
 } from '@/lib/ceremony';
 import { type PDFDocumentProxy, openPdf, pageImage, pageText } from '@/lib/pdf';
@@ -47,6 +53,8 @@ const MAX_REQUEST_BYTES = 3_500_000;
 
 const inputClassName =
   'border-input bg-background text-foreground focus-visible:ring-ring w-full rounded-md border px-2 py-1 text-sm outline-none focus-visible:ring-2';
+// For short number inputs inside a sentence.
+const numberClassName = inputClassName.replace('w-full', 'w-16');
 
 interface CeremonySetupProps {
   deck: PDFDocumentProxy | null;
@@ -117,35 +125,52 @@ export function CeremonySetup({
 
   // Plays text in Tina's voice (with the pronunciation list applied) on the chosen speaker.
   const [speaking, setSpeaking] = useState<string | null>(null);
-  const hear = async (key: string, text: string, language: LanguageCode = 'en') => {
+  const hear = async (
+    key: string,
+    text: string | string[],
+    language: LanguageCode = 'en',
+    gapSeconds = 0
+  ) => {
     setSpeaking(key);
     setError('');
     try {
-      const response = await fetch('/api/ceremony/speak', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: spokenText(text, settings.pronunciations),
-          voice,
-          language,
-        }),
-      });
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-      const url = URL.createObjectURL(await response.blob());
-      const audio: SinkableAudio = new Audio(url);
+      const parts = (Array.isArray(text) ? text : [text]).filter((t) => t.trim());
+      const urls = await Promise.all(
+        parts.map(async (part) => {
+          const response = await fetch('/api/ceremony/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              text: spokenText(part, settings.pronunciations),
+              voice,
+              language,
+            }),
+          });
+          if (!response.ok) {
+            throw new Error(await response.text());
+          }
+          return URL.createObjectURL(await response.blob());
+        })
+      );
       const speakerId = getSavedSpeakerId();
-      if (speakerId && audio.setSinkId) {
-        await audio.setSinkId(speakerId).catch(() => {});
-      }
-      audio.onended = () => {
+      for (const [i, url] of urls.entries()) {
+        if (i > 0 && gapSeconds) {
+          await new Promise((resolve) => setTimeout(resolve, gapSeconds * 1000));
+        }
+        const audio: SinkableAudio = new Audio(url);
+        if (speakerId && audio.setSinkId) {
+          await audio.setSinkId(speakerId).catch(() => {});
+        }
+        await new Promise<void>((resolve, reject) => {
+          audio.onended = () => resolve();
+          audio.onerror = () => reject(new Error('playback failed'));
+          audio.play().catch(reject);
+        });
         URL.revokeObjectURL(url);
-        setSpeaking(null);
-      };
-      await audio.play();
+      }
     } catch (e) {
       setError(`Could not play the preview: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
       setSpeaking(null);
     }
   };
@@ -174,6 +199,44 @@ export function CeremonySetup({
   useEffect(() => {
     void loadOvationPhoto().then(showOvation);
   }, []);
+
+  // Optional walk-up music, kept on this laptop.
+  const [musicName, setMusicName] = useState<string | null>(null);
+  const musicPreview = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => {
+    void loadWalkupMusic().then((blob) =>
+      setMusicName(blob ? (blob instanceof File ? blob.name : 'Walk-up music') : null)
+    );
+  }, []);
+  const previewMusic = async () => {
+    if (musicPreview.current) {
+      musicPreview.current.pause();
+      musicPreview.current = null;
+      return;
+    }
+    const blob = await loadWalkupMusic();
+    if (!blob) {
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const audio: SinkableAudio = new Audio(url);
+    audio.volume = settings.walkup_volume;
+    const speakerId = getSavedSpeakerId();
+    if (speakerId && audio.setSinkId) {
+      await audio.setSinkId(speakerId).catch(() => {});
+    }
+    musicPreview.current = audio;
+    audio.onended = () => (musicPreview.current = null);
+    void audio.play();
+    // A taste of it, as long as it plays after a winner.
+    setTimeout(() => {
+      if (musicPreview.current === audio) {
+        audio.pause();
+        musicPreview.current = null;
+      }
+      URL.revokeObjectURL(url);
+    }, settings.walkup_seconds * 1000);
+  };
 
   const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [status, setStatus] = useState('');
@@ -389,7 +452,12 @@ export function CeremonySetup({
                 </label>
                 <button
                   type="button"
-                  onClick={() => void hear(`award-${index}`, announcementFor(settings, award))}
+                  onClick={() => {
+                    const [lead, reveal] = announcementParts(settings, award);
+                    void (settings.suspense && lead
+                      ? hear(`award-${index}`, [lead, reveal], 'en', settings.suspense_seconds)
+                      : hear(`award-${index}`, announcementFor(settings, award)));
+                  }}
                   disabled={!award.script || speaking !== null}
                   className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs md:col-span-3"
                 >
@@ -593,6 +661,123 @@ export function CeremonySetup({
               </span>
             </div>
           </div>
+          <div className="flex flex-col gap-2">
+            <label className="flex flex-wrap items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.suspense}
+                onChange={(e) => updateSettings({ suspense: e.target.checked })}
+              />
+              Suspense reveal: the slide stays blurred, Tina says &ldquo;The award for … goes
+              to&rdquo;, a
+              <input
+                type="number"
+                min={1}
+                max={5}
+                step={0.5}
+                className={numberClassName}
+                value={settings.suspense_seconds}
+                onChange={(e) =>
+                  updateSettings({
+                    suspense_seconds: Math.min(5, Math.max(1, Number(e.target.value) || 2)),
+                  })
+                }
+              />
+              second countdown, then the name and the slide are revealed together
+            </label>
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.walkup}
+                onChange={(e) => updateSettings({ walkup: e.target.checked })}
+              />
+              Play walk-up music after each winner
+            </label>
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              {musicName && <span className="font-medium">{musicName}</span>}
+              <label className="border-input hover:bg-accent cursor-pointer rounded-full border px-3 py-1.5 font-medium">
+                {musicName ? 'Replace music' : 'Add music (MP3, optional)'}
+                <input
+                  type="file"
+                  accept="audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,audio/ogg"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (file && file.size > 15 * 1024 * 1024) {
+                      setError('The music file is too large (15 MB at most).');
+                    } else if (file) {
+                      void saveWalkupMusic(file);
+                      setMusicName(file.name);
+                    }
+                  }}
+                />
+              </label>
+              {musicName && (
+                <>
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground flex items-center gap-1"
+                    onClick={() => void previewMusic()}
+                  >
+                    <SpeakerHighIcon className="size-3.5" /> Hear it / stop
+                  </button>
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => {
+                      void saveWalkupMusic(null);
+                      setMusicName(null);
+                    }}
+                  >
+                    Remove
+                  </button>
+                </>
+              )}
+            </div>
+            <label className="flex flex-wrap items-center gap-2 text-xs">
+              Play for
+              <input
+                type="number"
+                min={5}
+                max={60}
+                className={numberClassName}
+                value={settings.walkup_seconds}
+                onChange={(e) =>
+                  updateSettings({
+                    walkup_seconds: Math.min(60, Math.max(5, Number(e.target.value) || 15)),
+                  })
+                }
+              />
+              seconds, at volume
+              <input
+                type="range"
+                min={0.1}
+                max={1}
+                step={0.05}
+                value={settings.walkup_volume}
+                onChange={(e) => updateSettings({ walkup_volume: Number(e.target.value) })}
+              />
+              {Math.round(settings.walkup_volume * 100)}%
+            </label>
+            <span className="text-muted-foreground text-xs">
+              Use instrumental music you have the rights to: lyrics through the PA can reach
+              Tina&rsquo;s microphone. It softens while Tina speaks and fades out on its own; M on
+              the stage starts or stops it.
+            </span>
+            <AwardMusic
+              awards={awards}
+              settings={settings}
+              onChange={(award_music) => updateSettings({ award_music })}
+            />
+          </div>
+          <p className="text-muted-foreground text-xs">
+            Videos: say &ldquo;Tina, play the … video&rdquo; and she plays the best HD match from
+            YouTube full screen. On the stage, N plays the next search result, Space pauses, V
+            stops. YouTube may show ads on some videos; that can&rsquo;t be turned off.
+          </p>
           <fieldset className="text-sm">
             <legend className="text-muted-foreground mb-1 text-xs">
               Languages the host can talk to Tina in (she replies in the same language)
@@ -652,7 +837,7 @@ export function CeremonySetup({
               min={0.5}
               max={4}
               step={0.1}
-              className={`${inputClassName} w-20`}
+              className={numberClassName}
               value={settings.listen_pause}
               onChange={(e) =>
                 updateSettings({
@@ -669,7 +854,7 @@ export function CeremonySetup({
               type="number"
               min={1}
               max={30}
-              className={`${inputClassName} w-16`}
+              className={numberClassName}
               value={settings.pause_seconds}
               onChange={(e) =>
                 updateSettings({
@@ -982,5 +1167,120 @@ function SpeechLanguages({
         </>
       )}
     </div>
+  );
+}
+
+/** A music link per award category, played after its winners (YouTube or audio file). */
+function AwardMusic({
+  awards,
+  settings,
+  onChange,
+}: {
+  awards: Award[];
+  settings: CeremonySettings;
+  onChange: (music: Record<string, string>) => void;
+}) {
+  const categories = [...new Map(awards.map((a) => [musicKey(a.category), a.category]))];
+  // The category being previewed, and its audio element for a file link.
+  const [testing, setTesting] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => {
+    if (!testing) {
+      return;
+    }
+    const timer = setTimeout(() => setTesting(null), settings.walkup_seconds * 1000);
+    return () => {
+      clearTimeout(timer);
+      audioRef.current?.pause();
+      audioRef.current = null;
+    };
+  }, [testing, settings.walkup_seconds]);
+
+  if (!categories.length) {
+    return null;
+  }
+  const test = (key: string) => {
+    if (testing === key) {
+      setTesting(null);
+      return;
+    }
+    const source = parseMusicUrl(settings.award_music[key] ?? '');
+    if (source?.kind === 'audio') {
+      const audio = new Audio(source.url);
+      audio.volume = settings.walkup_volume;
+      void audio.play();
+      audioRef.current = audio;
+    }
+    setTesting(key);
+  };
+  const testingSource = testing ? parseMusicUrl(settings.award_music[testing] ?? '') : null;
+
+  return (
+    <details className="text-xs">
+      <summary className="cursor-pointer text-sm">
+        Music per award (optional): a YouTube / YouTube Music link or an .mp3 link
+      </summary>
+      <p className="text-muted-foreground mt-1">
+        Plays for {settings.walkup_seconds} seconds after the award&rsquo;s winner is announced,
+        instead of the uploaded music. Add &amp;t=45 to the link to start at 0:45. YouTube music
+        shows a small player in the corner of the screen (YouTube requires the player to be
+        visible). Spotify and similar services can&rsquo;t be played in another page.
+      </p>
+      <div className="mt-2 flex flex-col gap-2">
+        {categories.map(([key, category]) => {
+          const link = settings.award_music[key] ?? '';
+          const source = parseMusicUrl(link);
+          return (
+            <div key={key} className="flex flex-wrap items-center gap-2">
+              <span className="w-48 truncate font-medium" title={category}>
+                {category}
+              </span>
+              <input
+                className={`${inputClassName} mt-0 min-w-56 flex-1`}
+                value={link}
+                placeholder="https://music.youtube.com/watch?v=…"
+                onChange={(e) => {
+                  const next = { ...settings.award_music, [key]: e.target.value.trim() };
+                  if (!next[key]) {
+                    delete next[key];
+                  }
+                  onChange(next);
+                }}
+              />
+              <span
+                className={
+                  !link ? 'text-muted-foreground' : source ? 'text-green-600' : 'text-destructive'
+                }
+              >
+                {!link
+                  ? 'Uploaded music'
+                  : source?.kind === 'youtube'
+                    ? `YouTube${source.start ? ` from ${source.start}s` : ''}`
+                    : source
+                      ? 'Audio file'
+                      : 'Not playable'}
+              </span>
+              {source && (
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-foreground flex items-center gap-1"
+                  onClick={() => test(key)}
+                >
+                  <SpeakerHighIcon className="size-3.5" /> {testing === key ? 'Stop' : 'Test'}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {testingSource?.kind === 'youtube' && (
+        <MusicCard
+          id={testingSource.id}
+          start={testingSource.start}
+          className="mt-2"
+          onPlayer={(player) => player?.setVolume(Math.round(settings.walkup_volume * 100))}
+        />
+      )}
+    </details>
   );
 }

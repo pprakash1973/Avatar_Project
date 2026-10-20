@@ -15,12 +15,20 @@ import {
   StopIcon,
 } from '@phosphor-icons/react/dist/ssr';
 import { APPLAUSE_MS, ApplauseCrowd } from '@/components/ceremony/applause-crowd';
+import { MusicCard } from '@/components/ceremony/music-card';
+import {
+  type StageVideo,
+  type VideoControls,
+  VideoPlayer,
+} from '@/components/ceremony/video-player';
+import { useWalkupMusic } from '@/components/ceremony/walkup-music';
 import { Button } from '@/components/ui/button';
 import { toastAlert } from '@/hooks/useAgentErrors';
 import { UI_STATUS_TOPIC } from '@/lib/agent-channels';
 import {
   type Award,
   CEREMONY_AWARDS_TOPIC,
+  CEREMONY_EVENTS_TOPIC,
   type CeremonySettings,
   loadOvationPhoto,
 } from '@/lib/ceremony';
@@ -88,6 +96,26 @@ const CORNERS = ['right-3 bottom-3', 'right-3 top-3', 'left-3 top-12', 'left-3 b
 
 // How long the announcement slide stays up before Tina returns to the middle.
 const SLIDE_HOLD_MS = 2 * 60 * 1000;
+// A hidden winner is revealed anyway after this long (if the reveal never arrives).
+const REVEAL_FAILSAFE_MS = 15_000;
+
+/** The drum-roll countdown (3, 2, 1) during the pause before the winner's name. */
+function Countdown({ seconds, startedAt }: { seconds: number; startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 100);
+    return () => clearInterval(timer);
+  }, []);
+  const left = Math.ceil(seconds - (now - startedAt) / 1000);
+  if (left <= 0) {
+    return null;
+  }
+  return (
+    <span key={left} className="suspense-pulse text-[18vh] leading-none font-bold text-white">
+      {left}
+    </span>
+  );
+}
 
 const STATE_LABELS: Record<string, string> = {
   listening: 'Listening for “Tina”',
@@ -111,7 +139,16 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   const [isLive, setIsLive] = useState(false);
   // 'tina': Tina large in the middle (default, and during breaks).
   // 'slide': the slide fills the screen and Tina moves to the corner.
-  const [view, setView] = useState<'tina' | 'slide'>('tina');
+  // 'video': a YouTube video fills the screen, Tina in the corner.
+  const [view, setView] = useState<'tina' | 'slide' | 'video'>('tina');
+  // Search results for the video on screen; N plays the next one.
+  const [videos, setVideos] = useState<StageVideo[]>([]);
+  const [videoIndex, setVideoIndex] = useState(0);
+  const videoControls = useRef<VideoControls | null>(null);
+  // Suspense: the award title over a blurred slide until Tina says the winner's name.
+  const [hiddenTitle, setHiddenTitle] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState<{ seconds: number; startedAt: number } | null>(null);
+  const [revealedAt, setRevealedAt] = useState(0);
   // Corner for Tina's small window over slides; C moves it if it covers a face or text.
   const [corner, setCorner] = useState(0);
   const [slideShownAt, setSlideShownAt] = useState(0);
@@ -139,6 +176,56 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   programRef.current = { awards, settings };
 
   useScreenWakeLock();
+
+  // Tells Tina about media playing through the PA, so she doesn't take it for the host.
+  const sendMedia = useCallback(
+    (kind: 'video' | 'music', playing: boolean) => {
+      void room.localParticipant
+        .sendText(JSON.stringify({ type: 'media', kind, playing }), {
+          topic: CEREMONY_EVENTS_TOPIC,
+        })
+        .catch(() => {});
+    },
+    [room]
+  );
+  const music = useWalkupMusic(settings, agent.state === 'speaking', (playing) =>
+    sendMedia('music', playing)
+  );
+  const musicRef = useRef(music);
+  musicRef.current = music;
+  // The award last announced: M plays its music.
+  const lastCategory = useRef('');
+
+  const reveal = useCallback(() => {
+    setHiddenTitle(null);
+    setCountdown(null);
+    setRevealedAt(Date.now());
+  }, []);
+
+  const endVideo = useCallback(() => {
+    setVideos([]);
+    setVideoIndex(0);
+    setView('tina');
+    sendMedia('video', false);
+  }, [sendMedia]);
+
+  const nextVideo = useCallback(() => {
+    setVideoIndex((i) => i + 1);
+  }, []);
+  // Past the last search result: back to Tina.
+  useEffect(() => {
+    if (videos.length && videoIndex >= videos.length) {
+      endVideo();
+    }
+  }, [videos.length, videoIndex, endVideo]);
+
+  useEffect(() => {
+    if (!hiddenTitle) {
+      return;
+    }
+    const timer = setTimeout(reveal, REVEAL_FAILSAFE_MS);
+    return () => clearTimeout(timer);
+  }, [hiddenTitle, reveal]);
 
   const goTo = useCallback(
     (n: number) => setSlide(Math.min(Math.max(1, n), deck.numPages)),
@@ -187,6 +274,34 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           setIsLive(true);
         } else if (status.type === 'slide') {
           showSlide(Number(status.slide) || 1);
+          if (status.hidden) {
+            // A new award: the music of the last one makes way.
+            musicRef.current.stop();
+            setCountdown(null);
+            setHiddenTitle(String(status.title || ''));
+          } else {
+            setHiddenTitle(null);
+          }
+        } else if (status.type === 'suspense') {
+          setCountdown({ seconds: Number(status.seconds) || 2, startedAt: Date.now() });
+        } else if (status.type === 'reveal') {
+          reveal();
+        } else if (status.type === 'video' && Array.isArray(status.videos)) {
+          musicRef.current.stop();
+          setVideos(status.videos as StageVideo[]);
+          setVideoIndex(Number(status.index) || 0);
+          setView('video');
+          sendMedia('video', true);
+        } else if (status.type === 'video_control') {
+          if (status.action === 'stop') {
+            endVideo();
+          } else if (status.action === 'next') {
+            nextVideo();
+          } else if (status.action === 'pause') {
+            videoControls.current?.pause();
+          } else if (status.action === 'play') {
+            videoControls.current?.play();
+          }
         } else if (status.type === 'view') {
           if (status.view === 'tina') {
             setView('tina');
@@ -197,6 +312,8 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           if (celebrateRef.current) {
             setApplauseAt(Date.now());
           }
+          lastCategory.current = String(status.category || '');
+          musicRef.current.start(lastCategory.current);
         } else if (status.type === 'hold') {
           setOnHold(Boolean(status.on));
         } else if (status.type === 'busy') {
@@ -210,7 +327,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
       }
     });
     return () => room.unregisterTextStreamHandler(UI_STATUS_TOPIC);
-  }, [room, showSlide]);
+  }, [room, showSlide, reveal, sendMedia, endVideo, nextVideo]);
 
   useEffect(() => {
     if (!isConnected) {
@@ -224,7 +341,24 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
         return;
       }
-      if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+      if (view === 'video') {
+        if (e.key.toLowerCase() === 'v' || e.key === 'Escape') {
+          endVideo();
+          return;
+        } else if (e.key.toLowerCase() === 'n') {
+          nextVideo();
+          return;
+        } else if (e.key === ' ') {
+          e.preventDefault();
+          videoControls.current?.toggle();
+          return;
+        }
+      }
+      if (e.key.toLowerCase() === 'r') {
+        reveal();
+      } else if (e.key.toLowerCase() === 'm') {
+        musicRef.current.toggle(lastCategory.current);
+      } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
         showSlide(slide + 1);
       } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
         showSlide(slide - 1);
@@ -246,7 +380,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [slide, showSlide]);
+  }, [slide, showSlide, view, endVideo, nextVideo, reveal]);
 
   const statusText = !isConnected
     ? connectionState === 'disconnected'
@@ -268,14 +402,35 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           />
         </div>
       )}
-      <div className={view === 'slide' ? 'size-full' : 'hidden'}>
-        <SlideCanvas deck={deck} slide={slide} />
+      <div className={view === 'slide' ? 'relative size-full' : 'hidden'}>
+        <div
+          key={revealedAt}
+          className={`size-full ${hiddenTitle !== null ? 'slide-hidden' : revealedAt ? 'slide-reveal' : ''}`}
+        >
+          <SlideCanvas deck={deck} slide={slide} />
+        </div>
+        {hiddenTitle !== null && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 text-center">
+            <p className="max-w-[80vw] text-[6vh] font-semibold text-white drop-shadow-lg">
+              {hiddenTitle}
+            </p>
+            {countdown && <Countdown seconds={countdown.seconds} startedAt={countdown.startedAt} />}
+          </div>
+        )}
       </div>
+      {view === 'video' && videos[videoIndex] && (
+        <VideoPlayer
+          video={videos[videoIndex]}
+          onEnded={endVideo}
+          onError={nextVideo}
+          controlsRef={videoControls}
+        />
+      )}
 
       {videoTrack && (
         <div
           className={`${
-            view === 'slide'
+            view !== 'tina'
               ? `absolute ${CORNERS[corner]} w-[13vw] min-w-28 overflow-hidden rounded-lg shadow-2xl ring-1 ring-white/20 transition-all duration-500`
               : 'absolute top-1/2 left-1/2 aspect-square h-[72vh] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl shadow-2xl ring-1 ring-white/20 transition-all duration-500'
           } ${agent.state === 'speaking' && settings.style === 'lively' ? 'speaking-glow ring-amber-300/60' : ''}`}
@@ -286,11 +441,23 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
 
       <div className="absolute top-3 left-3 rounded-full bg-black/60 px-3 py-1 text-xs text-white/90">
         {statusText} ·{' '}
-        {view === 'slide' ? `Slide ${slide}/${deck.numPages}` : 'Tina view (S: slide)'}
+        {view === 'slide'
+          ? `Slide ${slide}/${deck.numPages}`
+          : view === 'video'
+            ? 'Video'
+            : 'Tina view (S: slide)'}
         {onHold && ' · On hold (say “continue”)'}
+        {music.playing && ' · Music (M: stop)'}
       </div>
 
       {applauseAt > 0 && <ApplauseCrowd key={applauseAt} photoUrl={ovationUrl} />}
+      {music.youtube && (
+        <MusicCard
+          id={music.youtube.id}
+          start={music.youtube.start}
+          onPlayer={music.onYouTubePlayer}
+        />
+      )}
 
       {/* Operator controls: faint until hovered, so they don't distract the audience. */}
       <div className="absolute bottom-4 left-4 flex gap-2 opacity-20 transition-opacity focus-within:opacity-100 hover:opacity-100">
@@ -319,7 +486,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         <Button
           variant="secondary"
           onClick={() => setCorner((c) => (c + 1) % CORNERS.length)}
-          disabled={view !== 'slide'}
+          disabled={view === 'tina'}
         >
           Move Tina (C)
         </Button>

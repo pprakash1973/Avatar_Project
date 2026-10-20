@@ -38,5 +38,9 @@ class WakeWord:
             return True
         return time.monotonic() < self._open_until
 
+    def close(self) -> None:
+        """Ends the follow-up window: the next request needs her name again."""
+        self._open_until = 0.0
+
     def extend(self) -> None:
         self._open_until = time.monotonic() + self._window

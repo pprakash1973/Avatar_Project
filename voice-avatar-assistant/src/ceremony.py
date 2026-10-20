@@ -36,6 +36,7 @@ from livekit.agents.voice import SpeechHandle
 from claude import HELPER_MODEL, HelperUsage, get_client
 from wake_word import WakeWord, mentions_name
 from web_search import run_web_search
+from youtube import search_videos
 
 logger = logging.getLogger("agent.ceremony")
 
@@ -50,6 +51,14 @@ DEFAULT_WELCOME_NOTE = (
 
 
 DEFAULT_LISTEN_PAUSE = 1.5
+DEFAULT_SUSPENSE_SECONDS = 2.0
+# What the host says to control a playing video, checked in this order.
+VIDEO_CONTROLS: list[tuple[str, tuple[str, ...]]] = [
+    ("next", ("next", "another", "different", "wrong", "அடுத்த")),
+    ("pause", ("pause", "hold", "wait", "நிறுத்தி வை")),
+    ("play", ("play", "resume", "continue", "unpause", "தொடர")),
+    ("stop", ("stop", "close", "end", "enough", "நிறுத்து")),
+]
 DEFAULT_WINNER_PAUSE = 3.0
 # A first call that is only a greeting ("Hello Tina", "Good evening Tina").
 _SALUTATION_WORDS = {
@@ -181,6 +190,34 @@ def _phrase(text: str) -> str:
     return " ".join(re.sub(r"[^\w\u0900-\u0dff ]", " ", text.lower()).split())
 
 
+def video_control(text: str) -> str | None:
+    """next / pause / play / stop when the host is controlling the video."""
+    said = f" {_phrase(text)} "
+    for action, words in VIDEO_CONTROLS:
+        if any(f" {w}" in said for w in words):
+            return action
+    return None
+
+
+def short_title(title: str) -> str:
+    """A YouTube title as Tina would say it: "Nehru Trophy Snake Boat Race | Lake
+    Punnamada 4K #kerala" -> "Nehru Trophy Snake Boat Race"."""
+    head = re.split(r"\s[|\-\u2013\u2014:]\s|[|#(\[]", title)[0]
+    words = re.sub(r"[^\w\s'\u2019&,.!?\u0900-\u0dff]", " ", head).split()
+    return " ".join(words[:10]).rstrip(".,!?") or "the video"
+
+
+def silence(seconds: float, rate: int = 24000) -> AsyncIterable[rtc.AudioFrame]:
+    """Silent audio, for a dramatic pause inside an announcement."""
+    samples = rate // 50
+
+    async def frames():
+        for _ in range(int(seconds * 50)):
+            yield rtc.AudioFrame(b"\0\0" * samples, rate, 1, samples)
+
+    return frames()
+
+
 def script_language(text: str) -> str:
     """The language of the first Indic letter in the text, else "en"."""
     for char in text:
@@ -234,6 +271,9 @@ class CeremonySettings:
     # Seconds of silence before Tina treats the host's request as finished, so a
     # pause mid-sentence ("Tina, please announce ... the next award") isn't cut off.
     listen_pause: float = DEFAULT_LISTEN_PAUSE
+    # "And the winner is...": a pause before the name while the slide is hidden.
+    suspense: bool = True
+    suspense_seconds: float = DEFAULT_SUSPENSE_SECONDS
     congratulations: str = DEFAULT_CONGRATULATIONS
     # Phrases the host can say without "Tina", e.g. "please hold".
     keywords: list[tuple[str, KeywordAction]] = field(
@@ -253,6 +293,21 @@ class CeremonySettings:
         if self.congratulate and award.winner:
             parts.append(self.congratulations.replace("{winner}", award.winner))
         return self.spoken(" ".join(parts))
+
+    def announcement_parts(self, award: "Award") -> tuple[str, str]:
+        """The announcement split before the winner's name: ("The award for X goes
+        to", "Soumya Rao. ... Congratulations, Soumya Rao!"). The first part is ""
+        when the script doesn't contain the name."""
+        whole = self.announcement(award)
+        name = award.winner.strip()
+        at = award.script.lower().find(name.lower()) if name else -1
+        if at <= 0:
+            return "", whole
+        lead = award.script[:at].strip()
+        rest = [award.script[at:]]
+        if self.congratulate and award.winner:
+            rest.append(self.congratulations.replace("{winner}", award.winner))
+        return self.spoken(lead), self.spoken(" ".join(rest))
 
     def keyword(self, text: str) -> KeywordAction | None:
         """The action of the longest keyword phrase in what the host said."""
@@ -303,6 +358,13 @@ class CeremonyProgram:
             style="lively" if raw.get("style") == "lively" else "professional",
             listen_pause=min(
                 max(float(raw.get("listen_pause") or DEFAULT_LISTEN_PAUSE), 0.5), 4.0
+            ),
+            suspense=raw.get("suspense", True) is not False,
+            suspense_seconds=min(
+                max(
+                    float(raw.get("suspense_seconds") or DEFAULT_SUSPENSE_SECONDS), 1.0
+                ),
+                5.0,
             ),
             congratulations=str(
                 raw.get("congratulations") or DEFAULT_CONGRATULATIONS
@@ -458,6 +520,10 @@ class CeremonyHost(Agent):
         self._prompts |= {t for lines in REPLIES.values() for t in lines.values()}
         # The language of the host's last request (one of conversation_languages).
         self._host_language = "en"
+        # Media playing on the stage ("video", "music"): the PA feeds it into the mic.
+        self._media: set[str] = set()
+        # The slide on screen, so a winner on the same slide isn't hidden again.
+        self._shown_slide = 0
         # Not named _instructions: the Agent base class stores its text under that name.
         pause = program.settings.listen_pause
         super().__init__(
@@ -484,7 +550,7 @@ class CeremonyHost(Agent):
             if (
                 text
                 and text not in self._prompts
-                and all(text != said for _, said in self._last_said)
+                and all(text not in said for _, said in self._last_said)
             ):
                 # A reply the model wrote: "please repeat" says that again.
                 self._last_said = [("en", text)]
@@ -552,6 +618,16 @@ class CeremonyHost(Agent):
     def on_hold(self) -> bool:
         return not self._resumed.is_set()
 
+    def media_playing(self, kind: str, playing: bool) -> None:
+        """The stage started or stopped a video or the walk-up music."""
+        if playing:
+            self._media.add(kind)
+            # The soundtrack isn't the host: only a request with Tina's name counts.
+            self._wake.close()
+        else:
+            self._media.discard(kind)
+        logger.info("media %s %s", kind, "playing" if playing else "stopped")
+
     async def on_user_turn_completed(
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
     ) -> None:
@@ -565,6 +641,25 @@ class CeremonyHost(Agent):
             new_message.content = [text]
             logger.info("joined a paused request: %s", text)
         self._pending = ""
+        if self._media:
+            if not mentions_name(text):
+                raise StopResponse()
+            if "video" in self._media and re.search(r"award|விருது", text, re.I):
+                # "Tina, the next award please": end the video and carry on.
+                logger.info("video stopped for an award request")
+                self._media.discard("video")
+                await self._send_status({"type": "video_control", "action": "stop"})
+            elif "video" in self._media:
+                # During a video Tina only takes video controls, and stays quiet.
+                control = video_control(text)
+                if control:
+                    logger.info("video %s", control)
+                    if control == "stop":
+                        self._media.discard("video")
+                    await self._send_status(
+                        {"type": "video_control", "action": control}
+                    )
+                raise StopResponse()
         language = script_language(text)
         if language in self._program.settings.conversation_languages:
             self._host_language = language
@@ -704,6 +799,7 @@ class CeremonyHost(Agent):
                 - Use show_slide when the host asks to show a particular slide (the title slide is slide one), and hide_slides when they ask to hide the slide or show you instead.
                 - Between awards, reply briefly and graciously if the host speaks to you, for example "Thank you!".
                 - If the host asks a general question (facts, news, sports scores, weather, a person or company), call web_search and answer in one or two short sentences. Never use web search to find award winners.
+                - When the host asks you to play or show a video, clip or song, call play_video with a short YouTube search query. While it plays you stay silent.
                 - Spell out numbers.
                 {languages}
                 # Award categories, in presentation order
@@ -739,19 +835,46 @@ class CeremonyHost(Agent):
         logger.info(
             "announcing %s: %s (slide %d)", award.category, award.winner, award.slide
         )
-        await self._send_slide(award.slide)
-        # The approved text, exactly as written; applause must not cut it off.
-        handle = self.say_parts(
-            session, [("en", self._program.settings.announcement(award))]
-        )
+        settings = self._program.settings
+        lead, reveal = settings.announcement_parts(award)
+        # A new slide: hide the winner until Tina says the name. Further winners on
+        # the same slide (a team) are named straight away.
+        suspense = settings.suspense and bool(lead) and award.slide != self._shown_slide
+        await self._send_slide(award.slide, hidden=suspense, title=award.category)
+        self._shown_slide = award.slide
         award.announced = True
-        self._run(self._applause_after(handle))
+        if not suspense:
+            # The approved text, exactly as written; applause must not cut it off.
+            handle = self.say_parts(session, [("en", settings.announcement(award))])
+            self._run(self._applause_after(handle, award))
+            return handle
+        # All three are queued now, so nothing can come in between.
+        first = session.say(lead, allow_interruptions=False)
+        pause = session.say(
+            " ",
+            audio=silence(settings.suspense_seconds),
+            allow_interruptions=False,
+            add_to_chat_ctx=False,
+        )
+        handle = session.say(reveal, allow_interruptions=False)
+        self._last_said = [("en", settings.announcement(award))]
+        self._run(self._reveal_after(first, pause, settings.suspense_seconds))
+        self._run(self._applause_after(handle, award))
         return handle
 
-    async def _applause_after(self, handle: SpeechHandle) -> None:
-        """The on-screen audience stands up and claps once the announcement ends."""
+    async def _reveal_after(
+        self, lead: SpeechHandle, pause: SpeechHandle, seconds: float
+    ) -> None:
+        """Drum-roll countdown during the pause, then the slide is revealed."""
+        await lead.wait_for_playout()
+        await self._send_status({"type": "suspense", "seconds": seconds})
+        await pause.wait_for_playout()
+        await self._send_status({"type": "reveal"})
+
+    async def _applause_after(self, handle: SpeechHandle, award: Award) -> None:
+        """Once the announcement ends: the ovation and the award's walk-up music."""
         await handle.wait_for_playout()
-        await self._send_status({"type": "applause"})
+        await self._send_status({"type": "applause", "category": award.category})
 
     async def _continue_category(
         self, session: AgentSession, first: SpeechHandle, rest: list[Award]
@@ -851,6 +974,47 @@ class CeremonyHost(Agent):
         """
         await self._send_slide(max(1, slide_number))
         return f"Slide {slide_number} is on screen."
+
+    @function_tool()
+    async def play_video(self, ctx: RunContext, query: str) -> str:
+        """Find a video on YouTube and play it full screen, e.g. "Tina, play the
+        Kerala boat race video".
+
+        Args:
+            query: A short YouTube search query for the video the host wants.
+        """
+        logger.info("play_video: %s", query)
+        try:
+            videos = await search_videos(query)
+        except Exception as e:
+            logger.warning("YouTube search failed: %s", e)
+            videos = []
+        if not videos:
+            return "No video was found. Say so in one short sentence."
+        self.media_playing("video", True)
+        title = short_title(videos[0].title)
+        intro = f"இதோ, {title}." if self._host_language == "ta" else f"Here's {title}."
+        self._prompts.add(intro)
+        handle = ctx.session.say(intro, allow_interruptions=False)
+        # The video starts once Tina has introduced it.
+        self._run(self._play_after(handle, videos))
+        raise StopResponse()
+
+    async def _play_after(self, intro: SpeechHandle, videos: list) -> None:
+        await intro.wait_for_playout()
+        if "video" in self._media:
+            await self._send_status(
+                {"type": "video", "videos": [vars(v) for v in videos], "index": 0}
+            )
+
+    @function_tool()
+    async def stop_video(self, ctx: RunContext) -> str:
+        """Stop the video that is playing and show Tina again."""
+        if "video" not in self._media:
+            return "No video is playing."
+        self.media_playing("video", False)
+        await self._send_status({"type": "video_control", "action": "stop"})
+        return "The video is stopped."
 
     @function_tool()
     async def hide_slides(self, ctx: RunContext) -> str:

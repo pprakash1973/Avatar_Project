@@ -4,6 +4,8 @@
 import type { LanguageCode } from '@/lib/agent-channels';
 
 export const CEREMONY_AWARDS_TOPIC = 'ceremony-awards';
+/** The stage tells Tina what media it plays: {type: 'media', kind, playing}. */
+export const CEREMONY_EVENTS_TOPIC = 'ceremony-events';
 
 export type Award = {
   category: string;
@@ -39,6 +41,19 @@ export type CeremonySettings = {
   listen_pause: number;
   /** Show the ovation photo (if one was uploaded) after each winner. */
   celebrate: boolean;
+  /** "And the winner is...": the slide stays hidden until Tina says the name. */
+  suspense: boolean;
+  /** The dramatic pause before the name, in seconds. */
+  suspense_seconds: number;
+  /** Play the walk-up music (if one was uploaded) after each winner. */
+  walkup: boolean;
+  /** How long the music plays after the last winner of a category, in seconds. */
+  walkup_seconds: number;
+  /** Music volume, 0-1. */
+  walkup_volume: number;
+  /** Award category (see musicKey) -> a YouTube / YouTube Music or audio-file link played
+   * after its winners; categories without one use the uploaded walk-up music. */
+  award_music: Record<string, string>;
   /** Phrases the host can say (without "Tina") to control her. */
   keywords: Keyword[];
   /** Written name -> how Tina should say it (speech only; slides keep the real spelling). */
@@ -63,6 +78,56 @@ export const congratulationsFor = (settings: CeremonySettings, winner: string) =
   settings.congratulate && winner.trim()
     ? settings.congratulations.replaceAll('{winner}', winner.trim())
     : '';
+
+/** The announcement split before the winner's name, for the suspense pause:
+ * ["The award for X goes to", "Soumya Rao. ... Congratulations, Soumya!"]. */
+export function announcementParts(settings: CeremonySettings, award: Award): [string, string] {
+  const whole = announcementFor(settings, award);
+  const name = award.winner.trim();
+  const at = name ? award.script.toLowerCase().indexOf(name.toLowerCase()) : -1;
+  if (at <= 0) {
+    return ['', whole];
+  }
+  const rest = [award.script.slice(at), congratulationsFor(settings, award.winner)];
+  return [award.script.slice(0, at).trim(), rest.filter(Boolean).join(' ')];
+}
+
+/** The award_music key for a category: case and spacing don't matter. */
+export const musicKey = (category: string) => category.replace(/\s+/g, ' ').trim().toLowerCase();
+
+export type MusicSource =
+  | { kind: 'youtube'; id: string; start: number }
+  | { kind: 'audio'; url: string };
+
+/** A playable music link: YouTube / YouTube Music (with an optional start time such as
+ * &t=45 or ?t=1m5s), or a direct audio file. null for anything else (e.g. Spotify). */
+export function parseMusicUrl(link: string): MusicSource | null {
+  let url: URL;
+  try {
+    url = new URL(link.trim());
+  } catch {
+    return null;
+  }
+  const host = url.hostname.replace(/^(www|m|music)\./, '');
+  let id: string | null = null;
+  if (host === 'youtu.be') {
+    id = url.pathname.slice(1).split('/')[0];
+  } else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    id =
+      url.searchParams.get('v') ??
+      url.pathname.match(/^\/(?:embed|shorts|live)\/([\w-]{6,})/)?.[1] ??
+      null;
+  }
+  if (id && /^[\w-]{6,}$/.test(id)) {
+    const t = url.searchParams.get('t') ?? url.searchParams.get('start') ?? '0';
+    const [, m = '0', sec = '0'] = t.match(/^(?:(\d+)m)?(\d+)?s?$/) ?? [];
+    return { kind: 'youtube', id, start: Number(m) * 60 + Number(sec) };
+  }
+  if (/^https?:$/.test(url.protocol) && /\.(mp3|m4a|aac|ogg|oga|opus|wav)$/i.test(url.pathname)) {
+    return { kind: 'audio', url: url.toString() };
+  }
+  return null;
+}
 
 /** An award's announcement as Tina says it, including the congratulations. */
 export const announcementFor = (settings: CeremonySettings, award: Award) =>
@@ -114,6 +179,12 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   style: 'professional',
   listen_pause: 1.5,
   celebrate: true,
+  suspense: true,
+  suspense_seconds: 2,
+  walkup: true,
+  walkup_seconds: 15,
+  walkup_volume: 0.6,
+  award_music: {},
   keywords: [
     { phrase: 'please repeat', action: 'repeat' },
     { phrase: 'repeat that', action: 'repeat' },
@@ -282,28 +353,32 @@ export async function loadDeck(): Promise<Blob | null> {
 }
 
 const OVATION_KEY = 'ovation';
+const WALKUP_KEY = 'walkup-music';
 
 /** The optional audience photo shown during the applause; null removes it. */
-export async function saveOvationPhoto(file: Blob | null): Promise<void> {
+export const saveOvationPhoto = (file: Blob | null) => saveFile(OVATION_KEY, file);
+export const loadOvationPhoto = () => loadFile(OVATION_KEY);
+
+/** The optional walk-up music played after each winner; null removes it. */
+export const saveWalkupMusic = (file: Blob | null) => saveFile(WALKUP_KEY, file);
+export const loadWalkupMusic = () => loadFile(WALKUP_KEY);
+
+async function saveFile(key: string, file: Blob | null): Promise<void> {
   try {
     const db = await openDb();
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
       if (file) {
-        tx.objectStore(STORE).put(file, OVATION_KEY);
+        tx.objectStore(STORE).put(file, key);
       } else {
-        tx.objectStore(STORE).delete(OVATION_KEY);
+        tx.objectStore(STORE).delete(key);
       }
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
   } catch {
-    // Storage unavailable: the photo must be re-uploaded after a reload.
+    // Storage unavailable: the file must be re-uploaded after a reload.
   }
-}
-
-export async function loadOvationPhoto(): Promise<Blob | null> {
-  return loadFile(OVATION_KEY);
 }
 
 async function loadFile(key: string): Promise<Blob | null> {

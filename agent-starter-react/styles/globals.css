@@ -151,6 +151,46 @@
 }
 .stage-light { animation: stage-light 14s ease-in-out infinite; }
 .speaking-glow { animation: speaking-glow 0.9s ease-in-out infinite alternate; }
+/* Suspense: the slide is hidden until Tina says the winner's name. */
+.slide-hidden {
+  filter: blur(28px) brightness(0.45);
+  transform: scale(1.04);
+}
+@keyframes slide-reveal {
+  0% {
+    filter: blur(28px) brightness(1.8);
+    transform: scale(1.04);
+  }
+  25% {
+    filter: blur(0) brightness(1.6);
+  }
+  100% {
+    filter: none;
+    transform: none;
+  }
+}
+.slide-reveal {
+  animation: slide-reveal 0.9s ease-out;
+}
+@keyframes suspense-pulse {
+  0% {
+    opacity: 0;
+    transform: scale(1.6);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0.2;
+    transform: scale(0.9);
+  }
+}
+.suspense-pulse {
+  display: inline-block;
+  animation: suspense-pulse 1s ease-out forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .stage-light, .speaking-glow, .ovation-photo { animation: none; }
+  .stage-light, .speaking-glow, .ovation-photo, .slide-reveal, .suspense-pulse { animation: none; }
 }
