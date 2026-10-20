@@ -141,6 +141,8 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   // 'slide': the slide fills the screen and Tina moves to the corner.
   // 'video': a YouTube video fills the screen, Tina in the corner.
   const [view, setView] = useState<'tina' | 'slide' | 'video'>('tina');
+  const viewRef = useRef(view);
+  viewRef.current = view;
   // Search results for the video on screen; N plays the next one.
   const [videos, setVideos] = useState<StageVideo[]>([]);
   const [videoIndex, setVideoIndex] = useState(0);
@@ -193,8 +195,8 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   );
   const musicRef = useRef(music);
   musicRef.current = music;
-  // The award last announced: M plays its music.
-  const lastCategory = useRef('');
+  // The music link of the winner last announced: M plays it.
+  const lastMusic = useRef('');
 
   const reveal = useCallback(() => {
     setHiddenTitle(null);
@@ -282,6 +284,14 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           } else {
             setHiddenTitle(null);
           }
+        } else if (status.type === 'song') {
+          // A song the host asked for by name, e.g. during a break; it ends a video.
+          if (viewRef.current === 'video') {
+            endVideo();
+          }
+          musicRef.current.playSong(String(status.url || ''), String(status.name || ''));
+        } else if (status.type === 'music_stop') {
+          musicRef.current.stop();
         } else if (status.type === 'suspense') {
           setCountdown({ seconds: Number(status.seconds) || 2, startedAt: Date.now() });
         } else if (status.type === 'reveal') {
@@ -312,8 +322,18 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           if (celebrateRef.current) {
             setApplauseAt(Date.now());
           }
-          lastCategory.current = String(status.category || '');
-          musicRef.current.start(lastCategory.current);
+          // The winner's own music link, if the announcement has one.
+          const same = (a: string, b: unknown) =>
+            a.replace(/\s+/g, ' ').trim().toLowerCase() ===
+            String(b ?? '')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .toLowerCase();
+          const award = programRef.current.awards.find(
+            (a) => same(a.category, status.category) && same(a.winner, status.winner)
+          );
+          lastMusic.current = award?.music ?? '';
+          musicRef.current.start(lastMusic.current);
         } else if (status.type === 'hold') {
           setOnHold(Boolean(status.on));
         } else if (status.type === 'busy') {
@@ -357,7 +377,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
       if (e.key.toLowerCase() === 'r') {
         reveal();
       } else if (e.key.toLowerCase() === 'm') {
-        musicRef.current.toggle(lastCategory.current);
+        musicRef.current.toggle(lastMusic.current);
       } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
         showSlide(slide + 1);
       } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
@@ -447,7 +467,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
             ? 'Video'
             : 'Tina view (S: slide)'}
         {onHold && ' · On hold (say “continue”)'}
-        {music.playing && ' · Music (M: stop)'}
+        {music.playing && ` · ${music.song ? `♪ ${music.song}` : 'Music'} (M: stop)`}
       </div>
 
       {applauseAt > 0 && <ApplauseCrowd key={applauseAt} photoUrl={ovationUrl} />}
@@ -456,6 +476,8 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           id={music.youtube.id}
           start={music.youtube.start}
           onPlayer={music.onYouTubePlayer}
+          onEnded={music.stop}
+          title={music.song ?? 'Walk-up music'}
         />
       )}
 

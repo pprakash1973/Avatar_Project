@@ -24,13 +24,13 @@ import {
   type Translations,
   announcementFor,
   announcementParts,
+  congratulationsFor,
   defaultScript,
   greetingFor,
   loadAwards,
   loadDeck,
   loadOvationPhoto,
   loadWalkupMusic,
-  musicKey,
   parseMusicUrl,
   saveAwards,
   saveDeck,
@@ -328,12 +328,17 @@ export function CeremonySetup({
       throw new Error(await response.text());
     }
     const { awards: found } = (await response.json()) as { awards: ExtractedAward[] };
+    // Keep the music links already set for the same winners.
+    const key = (a: { category: string; winner: string }) =>
+      `${a.category}|${a.winner}`.replace(/\s+/g, ' ').trim().toLowerCase();
+    const music = new Map(awards.filter((a) => a.music).map((a) => [key(a), a.music]));
     update(
       found.map((a, i) => ({
         category: a.category,
         winner: a.winner,
         script: defaultScript(a, found[i - 1]),
         slide: a.slide,
+        music: music.get(key(a)),
       }))
     );
   };
@@ -477,6 +482,17 @@ export function CeremonySetup({
                     onChange={(e) => setField(index, 'script', e.target.value)}
                   />
                 </label>
+                <div className="text-muted-foreground text-xs md:col-span-3">
+                  Music URL (optional): plays for {settings.walkup_seconds} seconds after &ldquo;
+                  {congratulationsFor(settings, award.winner) || 'the announcement'}
+                  &rdquo;
+                  <MusicLink
+                    value={award.music ?? ''}
+                    onChange={(music) => setField(index, 'music', music || undefined)}
+                    settings={settings}
+                    emptyLabel="General walk-up music"
+                  />
+                </div>
               </div>
               <button
                 type="button"
@@ -767,10 +783,16 @@ export function CeremonySetup({
               Tina&rsquo;s microphone. It softens while Tina speaks and fades out on its own; M on
               the stage starts or stops it.
             </span>
-            <AwardMusic
-              awards={awards}
+            <label className="text-muted-foreground text-xs">
+              Or a music link (YouTube / YouTube Music, or an .mp3 link; add &amp;t=45 to start at
+              0:45). Used instead of the uploaded music; YouTube shows a small player in the corner
+              of the screen, as YouTube requires.
+            </label>
+            <MusicLink
+              value={settings.walkup_url}
+              onChange={(walkup_url) => updateSettings({ walkup_url })}
               settings={settings}
-              onChange={(award_music) => updateSettings({ award_music })}
+              emptyLabel={musicName ? 'Uploaded music' : 'No music'}
             />
           </div>
           <p className="text-muted-foreground text-xs">
@@ -997,6 +1019,64 @@ export function CeremonySetup({
         <MicrophoneSelect disabled={isStarting} />
       </section>
 
+      <section className="mt-4 rounded-xl border p-4">
+        <h2 className="text-sm font-semibold">7. Songs for breaks</h2>
+        <p className="text-muted-foreground mt-1 mb-3 text-xs">
+          Give each song a short name the host can say: &ldquo;Tina, play Jai Ho&rdquo; plays it to
+          the end (YouTube songs in a small player in the corner); &ldquo;Tina, stop the
+          music&rdquo; or M stops it. Any other song is searched on YouTube instead.
+        </p>
+        <ul className="flex flex-col gap-3">
+          {settings.songs.map((song, index) => (
+            <li key={index} className="flex flex-col gap-1 rounded-lg border p-2">
+              <div className="flex items-center gap-2">
+                <input
+                  className={inputClassName.replace('w-full', 'w-48')}
+                  value={song.name}
+                  placeholder="Name, e.g. Jai Ho"
+                  aria-label="Song name"
+                  onChange={(e) =>
+                    updateSettings({
+                      songs: settings.songs.map((s, i) =>
+                        i === index ? { ...s, name: e.target.value } : s
+                      ),
+                    })
+                  }
+                />
+                <button
+                  type="button"
+                  aria-label={`Remove ${song.name || 'song'}`}
+                  onClick={() =>
+                    updateSettings({ songs: settings.songs.filter((_, i) => i !== index) })
+                  }
+                  className="text-muted-foreground hover:text-destructive ml-auto"
+                >
+                  <TrashIcon className="size-4" />
+                </button>
+              </div>
+              <MusicLink
+                value={song.url}
+                onChange={(url) =>
+                  updateSettings({
+                    songs: settings.songs.map((s, i) => (i === index ? { ...s, url } : s)),
+                  })
+                }
+                settings={settings}
+                emptyLabel="Add a YouTube or .mp3 link"
+              />
+            </li>
+          ))}
+        </ul>
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-3"
+          onClick={() => updateSettings({ songs: [...settings.songs, { name: '', url: '' }] })}
+        >
+          <PlusIcon /> Add song
+        </Button>
+      </section>
+
       <div className="bg-background/95 sticky bottom-0 z-10 mt-4 flex flex-wrap items-center gap-3 border-t py-3 backdrop-blur">
         <Button onClick={() => void save()} disabled={saveState === 'saving'} variant="outline">
           {saveState === 'saving' ? (
@@ -1170,25 +1250,28 @@ function SpeechLanguages({
   );
 }
 
-/** A music link per award category, played after its winners (YouTube or audio file). */
-function AwardMusic({
-  awards,
-  settings,
+/** A music link (YouTube / YouTube Music / audio file) with its status and a Test button. */
+function MusicLink({
+  value,
   onChange,
+  settings,
+  emptyLabel,
 }: {
-  awards: Award[];
+  value: string;
+  onChange: (link: string) => void;
   settings: CeremonySettings;
-  onChange: (music: Record<string, string>) => void;
+  /** What plays when the link is empty. */
+  emptyLabel: string;
 }) {
-  const categories = [...new Map(awards.map((a) => [musicKey(a.category), a.category]))];
-  // The category being previewed, and its audio element for a file link.
-  const [testing, setTesting] = useState<string | null>(null);
+  const source = parseMusicUrl(value);
+  const [testing, setTesting] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // A test plays as long as the music would after a winner.
   useEffect(() => {
     if (!testing) {
       return;
     }
-    const timer = setTimeout(() => setTesting(null), settings.walkup_seconds * 1000);
+    const timer = setTimeout(() => setTesting(false), settings.walkup_seconds * 1000);
     return () => {
       clearTimeout(timer);
       audioRef.current?.pause();
@@ -1196,91 +1279,63 @@ function AwardMusic({
     };
   }, [testing, settings.walkup_seconds]);
 
-  if (!categories.length) {
-    return null;
-  }
-  const test = (key: string) => {
-    if (testing === key) {
-      setTesting(null);
+  const test = () => {
+    if (testing) {
+      setTesting(false);
       return;
     }
-    const source = parseMusicUrl(settings.award_music[key] ?? '');
     if (source?.kind === 'audio') {
       const audio = new Audio(source.url);
       audio.volume = settings.walkup_volume;
       void audio.play();
       audioRef.current = audio;
     }
-    setTesting(key);
+    setTesting(true);
   };
-  const testingSource = testing ? parseMusicUrl(settings.award_music[testing] ?? '') : null;
 
   return (
-    <details className="text-xs">
-      <summary className="cursor-pointer text-sm">
-        Music per award (optional): a YouTube / YouTube Music link or an .mp3 link
-      </summary>
-      <p className="text-muted-foreground mt-1">
-        Plays for {settings.walkup_seconds} seconds after the award&rsquo;s winner is announced,
-        instead of the uploaded music. Add &amp;t=45 to the link to start at 0:45. YouTube music
-        shows a small player in the corner of the screen (YouTube requires the player to be
-        visible). Spotify and similar services can&rsquo;t be played in another page.
-      </p>
-      <div className="mt-2 flex flex-col gap-2">
-        {categories.map(([key, category]) => {
-          const link = settings.award_music[key] ?? '';
-          const source = parseMusicUrl(link);
-          return (
-            <div key={key} className="flex flex-wrap items-center gap-2">
-              <span className="w-48 truncate font-medium" title={category}>
-                {category}
-              </span>
-              <input
-                className={`${inputClassName} mt-0 min-w-56 flex-1`}
-                value={link}
-                placeholder="https://music.youtube.com/watch?v=…"
-                onChange={(e) => {
-                  const next = { ...settings.award_music, [key]: e.target.value.trim() };
-                  if (!next[key]) {
-                    delete next[key];
-                  }
-                  onChange(next);
-                }}
-              />
-              <span
-                className={
-                  !link ? 'text-muted-foreground' : source ? 'text-green-600' : 'text-destructive'
-                }
-              >
-                {!link
-                  ? 'Uploaded music'
-                  : source?.kind === 'youtube'
-                    ? `YouTube${source.start ? ` from ${source.start}s` : ''}`
-                    : source
-                      ? 'Audio file'
-                      : 'Not playable'}
-              </span>
-              {source && (
-                <button
-                  type="button"
-                  className="text-muted-foreground hover:text-foreground flex items-center gap-1"
-                  onClick={() => test(key)}
-                >
-                  <SpeakerHighIcon className="size-3.5" /> {testing === key ? 'Stop' : 'Test'}
-                </button>
-              )}
-            </div>
-          );
-        })}
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          className={`${inputClassName} min-w-56 flex-1`}
+          value={value}
+          placeholder="https://music.youtube.com/watch?v=… or https://…/song.mp3"
+          onChange={(e) => {
+            setTesting(false);
+            onChange(e.target.value.trim());
+          }}
+        />
+        <span
+          className={`text-xs ${
+            !value ? 'text-muted-foreground' : source ? 'text-green-600' : 'text-destructive'
+          }`}
+        >
+          {!value
+            ? emptyLabel
+            : source?.kind === 'youtube'
+              ? `YouTube${source.start ? ` from ${source.start}s` : ''}`
+              : source
+                ? 'Audio file'
+                : 'Not playable: use a YouTube or .mp3 link'}
+        </span>
+        {source && (
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs"
+            onClick={test}
+          >
+            <SpeakerHighIcon className="size-3.5" /> {testing ? 'Stop' : 'Test'}
+          </button>
+        )}
       </div>
-      {testingSource?.kind === 'youtube' && (
+      {testing && source?.kind === 'youtube' && (
         <MusicCard
-          id={testingSource.id}
-          start={testingSource.start}
-          className="mt-2"
+          id={source.id}
+          start={source.start}
+          className="mt-1"
           onPlayer={(player) => player?.setVolume(Math.round(settings.walkup_volume * 100))}
         />
       )}
-    </details>
+    </div>
   );
 }

@@ -11,16 +11,22 @@ export function MusicCard({
   id,
   start,
   onPlayer,
+  onEnded,
+  title = 'Walk-up music',
   className = 'fixed bottom-20 left-4 z-50',
 }: {
   id: string;
   start: number;
   onPlayer: (player: YTPlayer | null) => void;
+  onEnded?: () => void;
+  title?: string;
   className?: string;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const onPlayerRef = useRef(onPlayer);
   onPlayerRef.current = onPlayer;
+  const onEndedRef = useRef(onEnded);
+  onEndedRef.current = onEnded;
 
   useEffect(() => {
     let player: YTPlayer | null = null;
@@ -43,6 +49,11 @@ export function MusicCard({
             player?.playVideo();
             onPlayerRef.current(player);
           },
+          onStateChange: (e) => {
+            if (e.data === YT.PlayerState.ENDED) {
+              onEndedRef.current?.();
+            }
+          },
         },
       });
     });
@@ -58,7 +69,7 @@ export function MusicCard({
       className={`${className} w-[min(22vw,320px)] min-w-[200px] overflow-hidden rounded-xl bg-black shadow-2xl ring-1 ring-white/20`}
     >
       <div ref={hostRef} className="aspect-video w-full" />
-      <div className="px-2 py-1 text-[10px] text-white/70">♪ Walk-up music</div>
+      <div className="truncate px-2 py-1 text-[10px] text-white/70">♪ {title}</div>
     </div>
   );
 }

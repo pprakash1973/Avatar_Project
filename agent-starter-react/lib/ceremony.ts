@@ -14,6 +14,9 @@ export type Award = {
   script: string;
   /** 1-based slide number shown while announcing. */
   slide: number;
+  /** Optional music link (YouTube / YouTube Music / audio file) played after this
+   * winner's congratulations; otherwise the general walk-up music. */
+  music?: string;
 };
 
 export type CeremonySettings = {
@@ -51,9 +54,11 @@ export type CeremonySettings = {
   walkup_seconds: number;
   /** Music volume, 0-1. */
   walkup_volume: number;
-  /** Award category (see musicKey) -> a YouTube / YouTube Music or audio-file link played
-   * after its winners; categories without one use the uploaded walk-up music. */
-  award_music: Record<string, string>;
+  /** General walk-up music link (YouTube / YouTube Music / audio file); the uploaded
+   * file is used when this is empty. An announcement's own music link comes first. */
+  walkup_url: string;
+  /** Songs the host can ask for by name ("Tina, play Jai Ho"), e.g. during a break. */
+  songs: Song[];
   /** Phrases the host can say (without "Tina") to control her. */
   keywords: Keyword[];
   /** Written name -> how Tina should say it (speech only; slides keep the real spelling). */
@@ -61,6 +66,8 @@ export type CeremonySettings = {
   /** When the settings were last saved (ms); the newer copy wins between devices. */
   saved_at?: number;
 };
+
+export type Song = { name: string; url: string };
 
 export type Translations = Partial<Record<LanguageCode, string>>;
 
@@ -91,9 +98,6 @@ export function announcementParts(settings: CeremonySettings, award: Award): [st
   const rest = [award.script.slice(at), congratulationsFor(settings, award.winner)];
   return [award.script.slice(0, at).trim(), rest.filter(Boolean).join(' ')];
 }
-
-/** The award_music key for a category: case and spacing don't matter. */
-export const musicKey = (category: string) => category.replace(/\s+/g, ' ').trim().toLowerCase();
 
 export type MusicSource =
   | { kind: 'youtube'; id: string; start: number }
@@ -184,7 +188,8 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   walkup: true,
   walkup_seconds: 15,
   walkup_volume: 0.6,
-  award_music: {},
+  walkup_url: '',
+  songs: [],
   keywords: [
     { phrase: 'please repeat', action: 'repeat' },
     { phrase: 'repeat that', action: 'repeat' },
@@ -245,6 +250,8 @@ function migrate(saved: Record<string, unknown>): CeremonySettings {
     delete (settings as Record<string, unknown>).multi_winner;
     settings.pause_seconds = DEFAULT_SETTINGS.pause_seconds;
   }
+  // Music links per category were replaced by a link per announcement.
+  delete (settings as Record<string, unknown>).award_music;
   // Tamil conversation came later: turn it on, with its keywords.
   if (!('conversation_languages' in saved)) {
     const known = new Set(settings.keywords.map((k) => k.phrase));

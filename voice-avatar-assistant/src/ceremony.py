@@ -202,7 +202,9 @@ def video_control(text: str) -> str | None:
 def short_title(title: str) -> str:
     """A YouTube title as Tina would say it: "Nehru Trophy Snake Boat Race | Lake
     Punnamada 4K #kerala" -> "Nehru Trophy Snake Boat Race"."""
-    head = re.split(r"\s[|\-\u2013\u2014:]\s|[|#(\[]", title)[0]
+    # "Luis Fonsi - Despacito (Official Video) | 4K" -> "Luis Fonsi, Despacito".
+    head = re.split(r"[|#(\[]", title)[0]
+    head = re.sub(r"\s[\-\u2013\u2014:]\s", ", ", head)
     words = re.sub(r"[^\w\s'\u2019&,.!?\u0900-\u0dff]", " ", head).split()
     return " ".join(words[:10]).rstrip(".,!?") or "the video"
 
@@ -281,6 +283,8 @@ class CeremonySettings:
     )
     # Written name -> how Tina should say it, e.g. "Soumya" -> "Sow-mya".
     pronunciations: dict[str, str] = field(default_factory=dict)
+    # Songs the host can ask for by name during a break: (name, link).
+    songs: list[tuple[str, str]] = field(default_factory=list)
 
     def greeting_for(self, host_name: str, text: str | None = None) -> str:
         return (self.greeting if text is None else text).replace(
@@ -316,6 +320,20 @@ class CeremonySettings:
             if phrase and f" {_phrase(phrase)} " in said:
                 return action
         return None
+
+    def song(self, name: str) -> tuple[str, str] | None:
+        """The song the host asked for, tolerating small differences in the name."""
+        names = {_phrase(n): (n, url) for n, url in self.songs}
+        wanted = _phrase(name)
+        if wanted in names:
+            return names[wanted]
+        contains = [
+            s for n, s in names.items() if wanted and (wanted in n or n in wanted)
+        ]
+        if len(contains) == 1:
+            return contains[0]
+        close = difflib.get_close_matches(wanted, list(names), n=1, cutoff=0.6)
+        return names[close[0]] if close else None
 
     def spoken(self, text: str) -> str:
         """Text as Tina should say it: names replaced by their spoken spelling."""
@@ -382,6 +400,13 @@ class CeremonyProgram:
                 if str(p.get("written", "")).strip()
                 and str(p.get("spoken", "")).strip()
             },
+            songs=[
+                (str(s["name"]).strip(), str(s["url"]).strip())
+                for s in raw.get("songs", []) or []
+                if isinstance(s, dict)
+                and str(s.get("name", "")).strip()
+                and str(s.get("url", "")).strip()
+            ],
         )
         awards = [
             Award(
@@ -522,6 +547,8 @@ class CeremonyHost(Agent):
         self._host_language = "en"
         # Media playing on the stage ("video", "music"): the PA feeds it into the mic.
         self._media: set[str] = set()
+        # When the current video started (the model must not stop it straight away).
+        self._video_started = 0.0
         # The slide on screen, so a winner on the same slide isn't hidden again.
         self._shown_slide = 0
         # Not named _instructions: the Agent base class stores its text under that name.
@@ -618,9 +645,25 @@ class CeremonyHost(Agent):
     def on_hold(self) -> bool:
         return not self._resumed.is_set()
 
+    def _new_request(self, text: str) -> bool:
+        """During a video: an award, a listed song or "play <something else>" is a new
+        request rather than a video control."""
+        said = _phrase(text)
+        if re.search(r"award|விருது", said):
+            return True
+        if any(
+            f" {_phrase(n)} " in f" {said} " for n, _ in self._program.settings.songs
+        ):
+            return True
+        return video_control(text) == "play" and bool(
+            re.search(r"\bplay (?!(it|again|on|the video|video|please)\b)\w", said)
+        )
+
     def media_playing(self, kind: str, playing: bool) -> None:
         """The stage started or stopped a video or the walk-up music."""
         if playing:
+            if kind == "video":
+                self._video_started = time.monotonic()
             self._media.add(kind)
             # The soundtrack isn't the host: only a request with Tina's name counts.
             self._wake.close()
@@ -644,9 +687,10 @@ class CeremonyHost(Agent):
         if self._media:
             if not mentions_name(text):
                 raise StopResponse()
-            if "video" in self._media and re.search(r"award|விருது", text, re.I):
-                # "Tina, the next award please": end the video and carry on.
-                logger.info("video stopped for an award request")
+            if "video" in self._media and self._new_request(text):
+                # "Tina, the next award please" or "Tina, play Jai Ho": end the video
+                # and carry on with the request.
+                logger.info("video stopped for a new request")
                 self._media.discard("video")
                 await self._send_status({"type": "video_control", "action": "stop"})
             elif "video" in self._media:
@@ -799,7 +843,8 @@ class CeremonyHost(Agent):
                 - Use show_slide when the host asks to show a particular slide (the title slide is slide one), and hide_slides when they ask to hide the slide or show you instead.
                 - Between awards, reply briefly and graciously if the host speaks to you, for example "Thank you!".
                 - If the host asks a general question (facts, news, sports scores, weather, a person or company), call web_search and answer in one or two short sentences. Never use web search to find award winners.
-                - When the host asks you to play or show a video, clip or song, call play_video with a short YouTube search query. While it plays you stay silent.
+                - When the host asks for one of the songs listed below by name ("Tina, play Jai Ho"), call play_song; it plays to the end. "Stop the music" calls stop_music.
+                - When the host asks you to play or show any other video, clip or song, call play_video with a short YouTube search query. While it plays you stay silent.
                 - Spell out numbers.
                 {languages}
                 # Award categories, in presentation order
@@ -808,6 +853,11 @@ class CeremonyHost(Agent):
             .replace("{style}", HOST_STYLES[self._program.settings.style])
             .replace("{languages}", self._language_rule())
             + categories
+            + "\n\n# Songs the host can ask for by name\n"
+            + (
+                "\n".join(f"- {name}" for name, _ in self._program.settings.songs)
+                or "- (none)"
+            )
             + "\n"
         )
 
@@ -874,7 +924,9 @@ class CeremonyHost(Agent):
     async def _applause_after(self, handle: SpeechHandle, award: Award) -> None:
         """Once the announcement ends: the ovation and the award's walk-up music."""
         await handle.wait_for_playout()
-        await self._send_status({"type": "applause", "category": award.category})
+        await self._send_status(
+            {"type": "applause", "category": award.category, "winner": award.winner}
+        )
 
     async def _continue_category(
         self, session: AgentSession, first: SpeechHandle, rest: list[Award]
@@ -978,7 +1030,8 @@ class CeremonyHost(Agent):
     @function_tool()
     async def play_video(self, ctx: RunContext, query: str) -> str:
         """Find a video on YouTube and play it full screen, e.g. "Tina, play the
-        Kerala boat race video".
+        Kerala boat race video". It replaces any music or video that is playing: never
+        stop anything first.
 
         Args:
             query: A short YouTube search query for the video the host wants.
@@ -1008,10 +1061,37 @@ class CeremonyHost(Agent):
             )
 
     @function_tool()
+    async def play_song(self, ctx: RunContext, name: str) -> str:
+        """Play one of the host's songs (listed in the instructions) by its name, e.g.
+        during a break: "Tina, play Jai Ho". It replaces any music or video that is
+        playing: never stop anything first.
+
+        Args:
+            name: The song's name as the host said it.
+        """
+        song = self._program.settings.song(name)
+        if not song:
+            names = ", ".join(n for n, _ in self._program.settings.songs) or "none"
+            return f"There is no song called {name}. The songs are: {names}. Say so briefly."
+        logger.info("play_song: %s", song[0])
+        await self._send_status({"type": "song", "name": song[0], "url": song[1]})
+        return (
+            f'{song[0]} is now playing. Say at most two words, e.g. "Enjoy, everyone!"'
+        )
+
+    @function_tool()
+    async def stop_music(self, ctx: RunContext) -> str:
+        """Stop the music, only when the host asks for that ("Tina, stop the music")."""
+        await self._send_status({"type": "music_stop"})
+        return "The music is stopped."
+
+    @function_tool()
     async def stop_video(self, ctx: RunContext) -> str:
-        """Stop the video that is playing and show Tina again."""
+        """Stop the video, only when the host asks for that ("Tina, stop the video")."""
         if "video" not in self._media:
             return "No video is playing."
+        if time.monotonic() - self._video_started < 10:
+            return "The video has just started; leave it playing."
         self.media_playing("video", False)
         await self._send_status({"type": "video_control", "action": "stop"})
         return "The video is stopped."

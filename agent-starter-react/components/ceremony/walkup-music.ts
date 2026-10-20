@@ -6,7 +6,6 @@ import {
   type CeremonySettings,
   type MusicSource,
   loadWalkupMusic,
-  musicKey,
   parseMusicUrl,
 } from '@/lib/ceremony';
 import { getSavedSpeakerId } from '@/lib/visitor';
@@ -24,8 +23,9 @@ type Output = { volume: number; setVolume: (v: number) => void; stop: () => void
 export type YouTubeMusic = { id: string; start: number };
 
 /**
- * Walk-up music after each winner: start(category) plays that award's music link (or the
- * uploaded file), fades it in and keeps it going for further winners of the award. It
+ * Walk-up music after each winner: start(link) plays the winner's music link (else the
+ * general link or the uploaded file), fades it in and keeps it going for further winners
+ * with the same music; a different link switches track. It
  * ducks under Tina's voice and fades out `walkup_seconds` after the last start(), or
  * straight away on stop().
  */
@@ -37,11 +37,15 @@ export function useWalkupMusic(
   const [file, setFile] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [youtube, setYouTube] = useState<YouTubeMusic | null>(null);
+  // The name of a song the host asked for (it plays to the end), or null.
+  const [song, setSong] = useState<string | null>(null);
   const output = useRef<Output | null>(null);
   const audioRef = useRef<SinkableAudio | null>(null);
   const fadeRef = useRef<number | null>(null);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const target = useRef(0);
+  // The link of the music playing now ('' for the uploaded file).
+  const current = useRef<string | null>(null);
   const speakingRef = useRef(tinaSpeaking);
   speakingRef.current = tinaSpeaking;
   const notify = useRef(onPlayingChange);
@@ -100,15 +104,22 @@ export function useWalkupMusic(
     fadeTo(0, () => {
       output.current?.stop();
       output.current = null;
+      current.current = null;
       setYouTube(null);
+      setSong(null);
       setPlaying(false);
       notify.current(false);
     });
   }, [fadeTo, youtube]);
 
-  const audioOutput = useCallback((url: string): Output => {
+  // Set by stop(); a song's end calls it through this ref.
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
+
+  const audioOutput = useCallback((url: string, loop: boolean): Output => {
     const audio: SinkableAudio = new Audio(url);
-    audio.loop = true;
+    audio.loop = loop;
+    audio.onended = () => stopRef.current();
     audio.volume = 0;
     const speakerId = getSavedSpeakerId();
     if (speakerId && audio.setSinkId) {
@@ -125,37 +136,64 @@ export function useWalkupMusic(
     };
   }, []);
 
-  /** Plays the music for this award (category from Tina), or the uploaded file. */
-  const start = useCallback(
-    (category = '') => {
-      if (!settings.walkup) {
-        return;
-      }
-      const source: MusicSource | null =
-        parseMusicUrl(settings.award_music[musicKey(category)] ?? '') ??
-        (file ? { kind: 'audio', url: file } : null);
-      if (!source) {
-        return;
-      }
+  /** Plays `source` (`link` names it): for `seconds`, or to the end when null. */
+  const play = useCallback(
+    (source: MusicSource, link: string, seconds: number | null, title: string | null) => {
       target.current = settings.walkup_volume;
       clearTimeout(stopTimerRef.current ?? undefined);
-      stopTimerRef.current = setTimeout(stop, settings.walkup_seconds * 1000);
-      if (playing) {
-        // A further winner of the same award: keep the music going.
+      stopTimerRef.current = seconds === null ? null : setTimeout(stop, seconds * 1000);
+      setSong(title);
+      if (playing && current.current === link) {
+        // A further winner with the same music: keep it going.
         fadeTo(level());
         return;
       }
+      if (playing) {
+        // A different song for this winner: switch straight away.
+        clearInterval(fadeRef.current ?? undefined);
+        output.current?.stop();
+        output.current = null;
+        setYouTube(null);
+      }
+      current.current = link;
       setPlaying(true);
       notify.current(true);
       if (source.kind === 'youtube') {
         // <MusicCard> creates the player and hands it to onYouTubePlayer.
         setYouTube({ id: source.id, start: source.start });
       } else {
-        output.current = audioOutput(source.url);
+        output.current = audioOutput(source.url, seconds !== null);
         fadeTo(level());
       }
     },
-    [settings, file, playing, stop, fadeTo, audioOutput]
+    [settings.walkup_volume, playing, stop, fadeTo, audioOutput]
+  );
+
+  /** Plays the winner's music link, else the general link, else the uploaded file. */
+  const start = useCallback(
+    (link = '') => {
+      if (!settings.walkup) {
+        return;
+      }
+      const chosen = [link, settings.walkup_url].find((l) => parseMusicUrl(l)) ?? '';
+      const source: MusicSource | null =
+        parseMusicUrl(chosen) ?? (file ? { kind: 'audio', url: file } : null);
+      if (source) {
+        play(source, chosen, settings.walkup_seconds, null);
+      }
+    },
+    [settings.walkup, settings.walkup_url, settings.walkup_seconds, file, play]
+  );
+
+  /** A song the host asked for by name: plays to the end, or until stopped. */
+  const playSong = useCallback(
+    (link: string, name: string) => {
+      const source = parseMusicUrl(link);
+      if (source) {
+        play(source, link, null, name);
+      }
+    },
+    [play]
   );
 
   const onYouTubePlayer = useCallback(
@@ -187,9 +225,9 @@ export function useWalkupMusic(
   }, [tinaSpeaking, playing, fadeTo]);
 
   const toggle = useCallback(
-    (category?: string) => (playing ? stop() : start(category)),
+    (link?: string) => (playing ? stop() : start(link)),
     [playing, start, stop]
   );
 
-  return { playing, youtube, start, stop, toggle, onYouTubePlayer };
+  return { playing, youtube, song, start, playSong, stop, toggle, onYouTubePlayer };
 }
