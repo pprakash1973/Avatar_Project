@@ -115,6 +115,13 @@ export async function POST(req: Request) {
     if (requested.mode === 'ceremony') {
       attributes.mode = 'ceremony';
       attributes.wake = '1';
+      // The languages the host may talk to Tina in, e.g. "en,ta".
+      if (typeof requested.listen === 'string') {
+        attributes.listen = requested.listen
+          .split(',')
+          .filter((code: string) => LANGUAGE_CODES.has(code))
+          .join(',');
+      }
     }
     if (typeof requested.visitor_id === 'string' && VISITOR_ID_RE.test(requested.visitor_id)) {
       attributes.visitor_id = requested.visitor_id;

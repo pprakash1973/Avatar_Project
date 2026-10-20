@@ -12,19 +12,25 @@ import logging
 import re
 import textwrap
 import time
+from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from typing import Literal
 
 import anthropic
+from livekit import rtc
 from livekit.agents import (
     Agent,
     AgentSession,
+    ModelSettings,
     RunContext,
     StopResponse,
     function_tool,
     llm,
+    stt,
     tts,
+    utils,
 )
+from livekit.agents.language import LanguageCode
 from livekit.agents.voice import SpeechHandle
 
 from claude import HELPER_MODEL, HelperUsage, get_client
@@ -68,6 +74,15 @@ _SALUTATION_WORDS = {
     "so",
     "um",
     "uh",
+    # Tamil: "வணக்கம்" (vanakkam), "காலை / மதிய / மாலை வணக்கம்" (good morning /
+    # afternoon / evening), "இனிய" (pleasant), "ஹலோ", "ஹாய்".
+    "வணக்கம்",
+    "காலை",
+    "மதிய",
+    "மாலை",
+    "இனிய",
+    "ஹலோ",
+    "ஹாய்",
 }
 # A request that stops on one of these words isn't finished ("...the award for");
 # Tina waits for the rest instead of answering half a sentence.
@@ -138,6 +153,12 @@ def unfinished(text: str) -> bool:
 
 DEFAULT_CONGRATULATIONS = "Congratulations, {winner}!"
 LANGUAGE_NAMES = {"en": "English", "hi": "Hindi", "ta": "Tamil", "ml": "Malayalam"}
+# The Unicode block of each language's script, to tell which language a text is in.
+_SCRIPTS = {
+    "hi": ("\u0900", "\u097f"),
+    "ta": ("\u0b80", "\u0bff"),
+    "ml": ("\u0d00", "\u0d7f"),
+}
 KeywordAction = Literal["repeat", "hold", "continue"]
 DEFAULT_KEYWORDS: list[tuple[str, KeywordAction]] = [
     ("please repeat", "repeat"),
@@ -145,11 +166,28 @@ DEFAULT_KEYWORDS: list[tuple[str, KeywordAction]] = [
     ("please hold", "hold"),
     ("hold on", "hold"),
     ("continue", "continue"),
+    # Tamil: "say it again", "wait", "wait a little", "continue".
+    ("மீண்டும் சொல்லுங்கள்", "repeat"),
+    ("திரும்ப சொல்லுங்க", "repeat"),
+    ("காத்திருங்கள்", "hold"),
+    ("கொஞ்சம் இருங்க", "hold"),
+    ("தொடருங்கள்", "continue"),
+    ("தொடருங்க", "continue"),
 ]
 
 
 def _phrase(text: str) -> str:
-    return " ".join(re.sub(r"[^\w ]", " ", text.lower()).split())
+    # Indic vowel signs aren't \w in Python: keep the whole Indic range.
+    return " ".join(re.sub(r"[^\w\u0900-\u0dff ]", " ", text.lower()).split())
+
+
+def script_language(text: str) -> str:
+    """The language of the first Indic letter in the text, else "en"."""
+    for char in text:
+        for language, (low, high) in _SCRIPTS.items():
+            if low <= char <= high:
+                return language
+    return "en"
 
 
 def _languages(raw) -> list[str]:
@@ -189,6 +227,8 @@ class CeremonySettings:
     welcome_languages: list[str] = field(default_factory=lambda: ["en"])
     welcome_translations: dict[str, str] = field(default_factory=dict)
     congratulate: bool = True
+    # Languages Tina understands and replies in; she answers in the host's language.
+    conversation_languages: list[str] = field(default_factory=lambda: ["en"])
     # How Tina carries herself: a polished "professional" host, or a "lively" MC.
     style: Literal["professional", "lively"] = "professional"
     # Seconds of silence before Tina treats the host's request as finished, so a
@@ -259,6 +299,7 @@ class CeremonyProgram:
             welcome_languages=_languages(raw.get("welcome_languages")),
             welcome_translations=_translations(raw.get("welcome_translations")),
             congratulate=raw.get("congratulate", True) is not False,
+            conversation_languages=_languages(raw.get("conversation_languages")),
             style="lively" if raw.get("style") == "lively" else "professional",
             listen_pause=min(
                 max(float(raw.get("listen_pause") or DEFAULT_LISTEN_PAUSE), 0.5), 4.0
@@ -341,6 +382,16 @@ HOST_STYLES = {
 HOLD_REPLY = "Sure, I'll wait."
 RESUME_REPLY = "Thank you! Let's continue."
 NOTHING_TO_REPEAT = "There's nothing to repeat yet."
+SEARCH_FILLER = "Let me check that for you."
+# Tina's own short lines in the other languages she can talk in.
+REPLIES = {
+    "ta": {
+        HOLD_REPLY: "சரி, நான் காத்திருக்கிறேன்.",
+        RESUME_REPLY: "நன்றி! தொடரலாம்.",
+        NOTHING_TO_REPEAT: "மீண்டும் சொல்ல இன்னும் எதுவும் இல்லை.",
+        SEARCH_FILLER: "ஒரு நிமிடம், பார்க்கிறேன்.",
+    },
+}
 DEFAULT_KEYWORDS_RAW = [{"phrase": p, "action": a} for p, a in DEFAULT_KEYWORDS]
 
 
@@ -404,6 +455,9 @@ class CeremonyHost(Agent):
         self._last_said: list[tuple[str, str]] = []
         # Prompts like "Shall I announce the next one?" aren't worth repeating.
         self._prompts: set[str] = {HOLD_REPLY, RESUME_REPLY, NOTHING_TO_REPEAT}
+        self._prompts |= {t for lines in REPLIES.values() for t in lines.values()}
+        # The language of the host's last request (one of conversation_languages).
+        self._host_language = "en"
         # Not named _instructions: the Agent base class stores its text under that name.
         pause = program.settings.listen_pause
         super().__init__(
@@ -435,6 +489,60 @@ class CeremonyHost(Agent):
                 # A reply the model wrote: "please repeat" says that again.
                 self._last_said = [("en", text)]
 
+    def _line(self, english: str) -> str:
+        """One of Tina's own short lines, in the host's language."""
+        return REPLIES.get(self._host_language, {}).get(english, english)
+
+    async def stt_node(
+        self, audio: AsyncIterable[rtc.AudioFrame], model_settings: ModelSettings
+    ) -> AsyncIterable[stt.SpeechEvent]:
+        # The multilingual STT labels everything English: label transcripts in another
+        # script with their language, so the English turn model doesn't misjudge them.
+        async for event in Agent.default.stt_node(self, audio, model_settings):
+            if isinstance(event, stt.SpeechEvent):
+                for alternative in event.alternatives:
+                    language = script_language(alternative.text)
+                    if language != "en":
+                        alternative.language = LanguageCode(language)
+            yield event
+
+    async def tts_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[rtc.AudioFrame]:
+        """Speaks a reply in another language (e.g. Tamil) with that language's voice."""
+        chunks = text.__aiter__()
+        head: list[str] = []
+        # Enough of the start to tell the language (a reply may start with a name).
+        async for chunk in chunks:
+            head.append(chunk)
+            if sum(c.isalpha() for c in "".join(head)) >= 12:
+                break
+        language = script_language("".join(head))
+
+        async def whole() -> AsyncIterable[str]:
+            for chunk in head:
+                yield chunk
+            async for chunk in chunks:
+                yield chunk
+
+        if language == "en":
+            async for frame in Agent.default.tts_node(self, whole(), model_settings):
+                yield frame
+            return
+        async with self._tts_for(language).stream() as stream:
+
+            async def push() -> None:
+                async for chunk in whole():
+                    stream.push_text(chunk)
+                stream.end_input()
+
+            pushing = asyncio.create_task(push())
+            try:
+                async for audio in stream:
+                    yield audio.frame
+            finally:
+                await utils.aio.cancel_and_wait(pushing)
+
     def _run(self, coro) -> None:
         task = asyncio.create_task(coro)
         self._tasks.add(task)
@@ -457,6 +565,9 @@ class CeremonyHost(Agent):
             new_message.content = [text]
             logger.info("joined a paused request: %s", text)
         self._pending = ""
+        language = script_language(text)
+        if language in self._program.settings.conversation_languages:
+            self._host_language = language
         action = self._program.settings.keyword(text)
         session = self.session
         if self.on_hold:
@@ -464,21 +575,21 @@ class CeremonyHost(Agent):
                 logger.info("resumed")
                 self._resumed.set()
                 await self._send_status({"type": "hold", "on": False})
-                session.say(RESUME_REPLY, allow_interruptions=False)
+                session.say(self._line(RESUME_REPLY), allow_interruptions=False)
                 self._wake.extend()
             raise StopResponse()
         if action == "hold":
             logger.info("on hold")
             self._resumed.clear()
             await self._send_status({"type": "hold", "on": True})
-            session.say(HOLD_REPLY, allow_interruptions=False)
+            session.say(self._line(HOLD_REPLY), allow_interruptions=False)
             raise StopResponse()
         if action == "repeat":
             logger.info("repeat")
             if self._last_said:
                 self.say_parts(session, self._last_said)
             else:
-                session.say(NOTHING_TO_REPEAT, allow_interruptions=False)
+                session.say(self._line(NOTHING_TO_REPEAT), allow_interruptions=False)
             raise StopResponse()
         # In the hall Tina only reacts when called by name (plus a short follow-up window).
         if not self._wake.accepts(text):
@@ -594,12 +705,31 @@ class CeremonyHost(Agent):
                 - Between awards, reply briefly and graciously if the host speaks to you, for example "Thank you!".
                 - If the host asks a general question (facts, news, sports scores, weather, a person or company), call web_search and answer in one or two short sentences. Never use web search to find award winners.
                 - Spell out numbers.
-
+                {languages}
                 # Award categories, in presentation order
                 """
-            ).replace("{style}", HOST_STYLES[self._program.settings.style])
+            )
+            .replace("{style}", HOST_STYLES[self._program.settings.style])
+            .replace("{languages}", self._language_rule())
             + categories
             + "\n"
+        )
+
+    def _language_rule(self) -> str:
+        others = [
+            LANGUAGE_NAMES[c]
+            for c in self._program.settings.conversation_languages
+            if c != "en"
+        ]
+        if not others:
+            return ""
+        names = " or ".join(others)
+        return (
+            f"- The host may speak English or {names}; {names} can come written in its "
+            f"own script or in English letters, often mixed with English words. Reply in "
+            f"the language of the host's latest request: {names} in its own script (never "
+            f"in English letters), with names kept as written. The tools speak the approved "
+            f"announcements and welcome note as configured: never translate or redo them.\n"
         )
 
     async def _refresh(self) -> None:
@@ -694,9 +824,11 @@ class CeremonyHost(Agent):
             query: The question or topic to search for.
         """
         logger.info("web_search: %s", query)
-        async with ctx.with_filler("Let me check that for you.", delay=1.5):
+        async with ctx.with_filler(self._line(SEARCH_FILLER), delay=1.5):
             try:
-                result = await run_web_search(query, "English", self._usage)
+                result = await run_web_search(
+                    query, LANGUAGE_NAMES[self._host_language], self._usage
+                )
             except anthropic.APIError as e:
                 logger.warning("web_search failed: %s", e)
                 return "The search failed. Say so briefly."

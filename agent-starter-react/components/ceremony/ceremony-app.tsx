@@ -63,7 +63,12 @@ export function CeremonyApp({ agentName }: { agentName?: string }) {
       }
     });
   }, []);
-  const participantAttributes = useMemo(() => ({ ...CEREMONY_ATTRIBUTES, voice }), [voice]);
+  // `listen`: the languages the host may talk to Tina in, which picks her hearing model.
+  const listen = settings.conversation_languages.join(',');
+  const participantAttributes = useMemo(
+    () => ({ ...CEREMONY_ATTRIBUTES, voice, listen }),
+    [voice, listen]
+  );
   const session = useSession(tokenSource, {
     agentConnectTimeoutMilliseconds: 60_000,
     ...(agentName ? { agentName } : {}),

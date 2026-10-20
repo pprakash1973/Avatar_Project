@@ -27,6 +27,8 @@ export type CeremonySettings = {
   greeting_translations: Translations;
   welcome_languages: LanguageCode[];
   welcome_translations: Translations;
+  /** Languages Tina understands and replies in (English always); she answers in the host's. */
+  conversation_languages: LanguageCode[];
   /** Say e.g. "Congratulations, Soumya!" after every winner's announcement. */
   congratulate: boolean;
   /** {winner} is replaced by the winner's name. */
@@ -81,6 +83,19 @@ export function spokenText(text: string, pronunciations: Pronunciation[]) {
     );
 }
 
+/** Languages the host can talk to Tina in besides English (needs Gemini hearing). */
+export const CONVERSATION_LANGUAGES: LanguageCode[] = ['ta'];
+
+/** "Say it again", "wait", "wait a little", "continue" in Tamil. */
+const TAMIL_KEYWORDS: Keyword[] = [
+  { phrase: 'மீண்டும் சொல்லுங்கள்', action: 'repeat' },
+  { phrase: 'திரும்ப சொல்லுங்க', action: 'repeat' },
+  { phrase: 'காத்திருங்கள்', action: 'hold' },
+  { phrase: 'கொஞ்சம் இருங்க', action: 'hold' },
+  { phrase: 'தொடருங்கள்', action: 'continue' },
+  { phrase: 'தொடருங்க', action: 'continue' },
+];
+
 export const DEFAULT_SETTINGS: CeremonySettings = {
   pause_seconds: 3,
   greeting: 'Hi {name}, good day! I am happy to be your co-host.',
@@ -93,6 +108,7 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   greeting_translations: {},
   welcome_languages: ['en'],
   welcome_translations: {},
+  conversation_languages: ['en', 'ta'],
   congratulate: true,
   congratulations: 'Congratulations, {winner}!',
   style: 'professional',
@@ -104,6 +120,7 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
     { phrase: 'please hold', action: 'hold' },
     { phrase: 'hold on', action: 'hold' },
     { phrase: 'continue', action: 'continue' },
+    ...TAMIL_KEYWORDS,
   ],
   pronunciations: [
     { written: 'Soumya', spoken: 'Sow-mya' },
@@ -156,6 +173,14 @@ function migrate(saved: Record<string, unknown>): CeremonySettings {
   if ('multi_winner' in saved) {
     delete (settings as Record<string, unknown>).multi_winner;
     settings.pause_seconds = DEFAULT_SETTINGS.pause_seconds;
+  }
+  // Tamil conversation came later: turn it on, with its keywords.
+  if (!('conversation_languages' in saved)) {
+    const known = new Set(settings.keywords.map((k) => k.phrase));
+    settings.keywords = [
+      ...settings.keywords,
+      ...TAMIL_KEYWORDS.filter((k) => !known.has(k.phrase)),
+    ];
   }
   return settings;
 }

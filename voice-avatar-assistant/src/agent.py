@@ -100,6 +100,20 @@ def make_stt(language: str) -> stt.STT:
     return deepgram.STT(model="nova-3", language=language)
 
 
+def make_ceremony_stt(languages: list[str]) -> stt.STT:
+    """Hearing for a ceremony; with other languages than English, one model for all."""
+    if languages == ["en"]:
+        return make_stt("en")
+    # Gemini detects the language itself: English, Tamil and mixed Tamil-English were
+    # transcribed correctly, while Deepgram's multilingual model doesn't know Tamil.
+    # It finalizes about half a second later than Deepgram. Billed via LiveKit Cloud.
+    return inference.STT(
+        model="google/gemini-3.5-transcribe-live",
+        extra_kwargs={"custom_vocabulary": ["Tina", "டீனா"]},
+        fallback=["deepgram/nova-3"],
+    )
+
+
 def make_tts(language: str, voice: str = "") -> tts.TTS:
     # Malayalam voices need Sonic 3.6; the other languages stay on the tested sonic-3.
     return cartesia.TTS(
@@ -682,6 +696,12 @@ async def entrypoint(ctx: JobContext) -> None:
     if not store.valid_visitor_id(visitor_id):
         visitor_id = ""
     is_ceremony = attributes.get("mode") == "ceremony"
+    # Languages the ceremony host may speak to Tina in, e.g. "en,ta".
+    listen = ["en"] + [
+        c
+        for c in attributes.get("listen", "").split(",")
+        if c in LANGUAGES and c != "en"
+    ]
     if is_ceremony:
         language = "en"
     # In a ceremony Tina must ignore the hall unless called; elsewhere it's optional.
@@ -700,7 +720,7 @@ async def entrypoint(ctx: JobContext) -> None:
     }
 
     session = AgentSession(
-        stt=make_stt(language),
+        stt=make_ceremony_stt(listen) if is_ceremony else make_stt(language),
         tts=make_tts(language, attributes.get("voice", "")),
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),

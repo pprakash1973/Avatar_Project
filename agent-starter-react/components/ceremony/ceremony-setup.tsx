@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { LANGUAGES, type LanguageCode, type VoiceCode } from '@/lib/agent-channels';
 import {
   type Award,
+  CONVERSATION_LANGUAGES,
   type CeremonySettings,
   type ExtractedAward,
   KEYWORD_ACTIONS,
@@ -592,6 +593,35 @@ export function CeremonySetup({
               </span>
             </div>
           </div>
+          <fieldset className="text-sm">
+            <legend className="text-muted-foreground mb-1 text-xs">
+              Languages the host can talk to Tina in (she replies in the same language)
+            </legend>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked disabled />
+              English
+            </label>
+            {CONVERSATION_LANGUAGES.map((code) => (
+              <label key={code} className="mt-1 flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={settings.conversation_languages.includes(code)}
+                  onChange={(e) =>
+                    updateSettings({
+                      conversation_languages: e.target.checked
+                        ? [...settings.conversation_languages, code]
+                        : settings.conversation_languages.filter((c) => c !== code),
+                    })
+                  }
+                />
+                {LANGUAGES.find((l) => l.code === code)?.label ?? code}
+              </label>
+            ))}
+            <span className="text-muted-foreground mt-1 block text-xs">
+              Tina hears mixed Tamil and English too. Announcements are read as written. With Tamil
+              on she answers about half a second later.
+            </span>
+          </fieldset>
           <fieldset className="text-sm">
             <legend className="text-muted-foreground mb-1 text-xs">
               Tina&rsquo;s hosting style
