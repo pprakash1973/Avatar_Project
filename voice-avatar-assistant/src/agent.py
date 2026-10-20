@@ -14,6 +14,7 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    APIConnectionError,
     APIConnectOptions,
     APIStatusError,
     JobContext,
@@ -144,12 +145,17 @@ def room_options(*, ceremony: bool) -> room_io.RoomOptions:
 AVATAR_JOIN_TIMEOUT_SECONDS = 20
 
 
-def avatar_provider() -> str:
-    """AVATAR_PROVIDER picks the avatar; defaults to Simli when its key is set."""
-    provider = os.environ.get("AVATAR_PROVIDER", "").lower()
-    if provider in ("simli", "anam"):
-        return provider
-    return "simli" if os.environ.get("SIMLI_API_KEY") else "anam"
+AVATAR_KEYS = {"anam": "ANAM_API_KEY", "simli": "SIMLI_API_KEY"}
+
+
+def avatar_providers() -> list[str]:
+    """The avatars to try in order: AVATAR_PROVIDER (Anam by default), then the
+    other one as a backup, each only if its key is set."""
+    first = os.environ.get("AVATAR_PROVIDER", "").lower()
+    if first not in AVATAR_KEYS:
+        first = "anam"
+    order = [first] + [p for p in AVATAR_KEYS if p != first]
+    return [p for p in order if os.environ.get(AVATAR_KEYS[p])]
 
 
 async def start_avatar(
@@ -191,7 +197,7 @@ async def start_avatar(
             ),
             AVATAR_JOIN_TIMEOUT_SECONDS,
         )
-    except (APIStatusError, TimeoutError) as e:
+    except (APIStatusError, APIConnectionError, TimeoutError) as e:
         logger.warning("%s avatar unavailable: %s", provider, e)
         return False
     return True
@@ -738,9 +744,14 @@ async def entrypoint(ctx: JobContext) -> None:
 
     # The avatar was started after ctx.connect() above: it needs a connected room
     # to join, otherwise it hangs and can time out the whole session.
-    provider = avatar_provider()
+    provider = ""
+    for candidate in avatar_providers():
+        if await start_avatar(candidate, session, ctx, long_event=is_ceremony):
+            provider = candidate
+            break
+        logger.warning("%s avatar failed; trying the backup", candidate)
     record["avatar_provider"] = provider
-    if not await start_avatar(provider, session, ctx, long_event=is_ceremony):
+    if not provider:
         # Usually the provider's plan limit (concurrent sessions or free minutes):
         # tell the browser and end this call instead of leaving it spinning.
         await send_ui(ctx.room, UI_STATUS_TOPIC, {"type": "busy"})

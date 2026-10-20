@@ -202,7 +202,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         } else if (status.type === 'busy') {
           toastAlert({
             title: 'The avatar is busy or unavailable',
-            description: 'Check the Simli plan minutes, then reconnect Tina.',
+            description: 'Check the Anam and Simli plan minutes, then reconnect Tina.',
           });
         }
       } catch (error) {
