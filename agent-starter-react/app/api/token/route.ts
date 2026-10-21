@@ -27,7 +27,7 @@ const CALLS_PER_HOUR = Number(process.env.RATE_LIMIT_CALLS_PER_HOUR ?? 5);
 const SAME_CALL_WINDOW_SECONDS = 30;
 const LANGUAGE_CODES = new Set(['en', 'hi', 'ta', 'ml']);
 const STYLE_CODES = new Set(['friendly', 'professional', 'concise', 'humorous']);
-const VOICE_CODES = new Set(['priya', 'janvi', 'kiara', 'simi', 'katie']);
+const VOICE_CODES = new Set(['neerja', 'priya', 'janvi', 'kiara', 'simi', 'katie']);
 const VISITOR_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 // connection_check_ rooms come from the connection test and carry no agent dispatch.
 const ROOM_NAME_RE = /^(voice_assistant_room|connection_check)_[A-Za-z0-9-]{8,64}$/;

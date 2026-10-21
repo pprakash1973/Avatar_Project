@@ -29,7 +29,15 @@ from livekit.agents import (
     stt,
     tts,
 )
-from livekit.plugins import ai_coustics, anam, anthropic, cartesia, deepgram, simli
+from livekit.plugins import (
+    ai_coustics,
+    anam,
+    anthropic,
+    azure,
+    cartesia,
+    deepgram,
+    simli,
+)
 from livekit.plugins.anthropic import llm as _anthropic_llm
 
 import files
@@ -87,6 +95,10 @@ VOICES = {
     "katie": "f786b574-daa5-4673-aa0c-cbe3e8534c02",
 }
 TINA_VOICE_ID = os.environ.get("TINA_VOICE_ID", VOICES["priya"])
+# Azure voices (AZURE_SPEECH_KEY / AZURE_SPEECH_REGION): Neerja HD speaks English and
+# the Indian languages in the same voice. Cartesia (Priya) takes over if Azure fails.
+AZURE_VOICES = {"neerja": "en-IN-Neerja:DragonHDLatestNeural"}
+AZURE_LANGUAGES = {"en": "en-IN", "hi": "hi-IN", "ta": "ta-IN", "ml": "ml-IN"}
 
 # No defaults on enum tool params: LiveKit makes defaulted params nullable, and the
 # Claude API rejects an enum typed ["string", "null"], failing every LLM request.
@@ -119,11 +131,17 @@ def make_ceremony_stt(languages: list[str]) -> stt.STT:
 
 def make_tts(language: str, voice: str = "") -> tts.TTS:
     # Malayalam voices need Sonic 3.6; the other languages stay on the tested sonic-3.
-    return cartesia.TTS(
+    voice_cartesia = cartesia.TTS(
         model="sonic-3.6" if language == "ml" else "sonic-3",
         language=language,
         voice=VOICES.get(voice, TINA_VOICE_ID),
     )
+    if voice not in AZURE_VOICES or not os.environ.get("AZURE_SPEECH_KEY"):
+        return voice_cartesia
+    voice_azure = azure.TTS(
+        voice=AZURE_VOICES[voice], language=AZURE_LANGUAGES.get(language, "en-IN")
+    )
+    return tts.FallbackAdapter([voice_azure, voice_cartesia])
 
 
 def room_options(*, ceremony: bool) -> room_io.RoomOptions:

@@ -69,8 +69,10 @@ export const STYLES = [
 
 export type StyleCode = (typeof STYLES)[number]['code'];
 
-// Tina's voices (Cartesia); keys match VOICES in voice-avatar-assistant/src/agent.py.
+// Tina's voices; keys match VOICES / AZURE_VOICES in voice-avatar-assistant/src/agent.py.
+// Neerja HD is Azure (falls back to Priya); the others are Cartesia.
 export const VOICES = [
+  { code: 'neerja', label: 'Neerja HD', accent: 'Indian English' },
   { code: 'priya', label: 'Priya', accent: 'Indian English' },
   { code: 'janvi', label: 'Janvi', accent: 'Indian English' },
   { code: 'kiara', label: 'Kiara', accent: 'Indian English' },
@@ -79,4 +81,4 @@ export const VOICES = [
 ] as const;
 
 export type VoiceCode = (typeof VOICES)[number]['code'];
-export const DEFAULT_VOICE: VoiceCode = 'priya';
+export const DEFAULT_VOICE: VoiceCode = 'neerja';
