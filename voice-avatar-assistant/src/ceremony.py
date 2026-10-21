@@ -51,7 +51,7 @@ DEFAULT_WELCOME_NOTE = (
 
 
 DEFAULT_LISTEN_PAUSE = 1.5
-DEFAULT_SUSPENSE_SECONDS = 2.0
+DEFAULT_SUSPENSE_SECONDS = 5.0
 # What the host says to control a playing video, checked in this order.
 VIDEO_CONTROLS: list[tuple[str, tuple[str, ...]]] = [
     ("next", ("next", "another", "different", "wrong", "அடுத்த")),
@@ -382,7 +382,7 @@ class CeremonyProgram:
                 max(
                     float(raw.get("suspense_seconds") or DEFAULT_SUSPENSE_SECONDS), 1.0
                 ),
-                5.0,
+                10.0,
             ),
             congratulations=str(
                 raw.get("congratulations") or DEFAULT_CONGRATULATIONS

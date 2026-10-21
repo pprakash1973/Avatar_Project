@@ -184,7 +184,7 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   listen_pause: 1.5,
   celebrate: true,
   suspense: true,
-  suspense_seconds: 2,
+  suspense_seconds: 5,
   walkup: true,
   walkup_seconds: 15,
   walkup_volume: 0.6,

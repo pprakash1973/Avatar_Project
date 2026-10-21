@@ -293,7 +293,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         } else if (status.type === 'music_stop') {
           musicRef.current.stop();
         } else if (status.type === 'suspense') {
-          setCountdown({ seconds: Number(status.seconds) || 2, startedAt: Date.now() });
+          setCountdown({ seconds: Number(status.seconds) || 5, startedAt: Date.now() });
         } else if (status.type === 'reveal') {
           reveal();
         } else if (status.type === 'video' && Array.isArray(status.videos)) {

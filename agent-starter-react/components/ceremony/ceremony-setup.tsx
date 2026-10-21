@@ -689,13 +689,13 @@ export function CeremonySetup({
               <input
                 type="number"
                 min={1}
-                max={5}
+                max={10}
                 step={0.5}
                 className={numberClassName}
                 value={settings.suspense_seconds}
                 onChange={(e) =>
                   updateSettings({
-                    suspense_seconds: Math.min(5, Math.max(1, Number(e.target.value) || 2)),
+                    suspense_seconds: Math.min(10, Math.max(1, Number(e.target.value) || 5)),
                   })
                 }
               />
