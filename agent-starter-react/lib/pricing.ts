@@ -30,7 +30,11 @@ export type CallRecord = {
   language: string;
   avatar_provider?: 'simli' | 'anam';
   started_at: string;
-  status: 'ok' | 'busy';
+  status: 'ok' | 'busy' | 'error';
+  /** Why the call ended, e.g. "host left: CLIENT_INITIATED" or "avatar left: ...". */
+  ended_by?: string;
+  /** Timeline of the call: seconds from the start, event and details. */
+  events?: { t: number; event: string; [key: string]: unknown }[];
   duration_s: number;
   searches?: number;
   web_search_requests?: number;

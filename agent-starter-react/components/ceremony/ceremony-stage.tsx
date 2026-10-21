@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ConnectionQuality, DisconnectReason, RoomEvent } from 'livekit-client';
 import {
   VideoTrack,
   useAgent,
@@ -64,6 +65,47 @@ function SlideCanvas({ deck, slide }: { deck: PDFDocumentProxy; slide: number })
       <canvas ref={canvasRef} aria-label={`Slide ${slide}`} />
     </div>
   );
+}
+
+/**
+ * Reports what goes wrong on this page (its LiveKit disconnect reason, reconnects, a
+ * poor connection, page errors) to the server, to explain a dropped call afterwards.
+ */
+function useClientLog(room: ReturnType<typeof useSessionContext>['room']) {
+  useEffect(() => {
+    const log = (event: string, detail = '') =>
+      void fetch('/api/ceremony/client-log', {
+        method: 'POST',
+        keepalive: true,
+        body: JSON.stringify({ room: room.name, event, detail }),
+      }).catch(() => {});
+    const onDisconnected = (reason?: DisconnectReason) =>
+      log('disconnected', reason === undefined ? 'unknown' : DisconnectReason[reason]);
+    const onReconnecting = () => log('reconnecting');
+    const onReconnected = () => log('reconnected');
+    const onQuality = (quality: ConnectionQuality, participant: { isLocal: boolean }) => {
+      if (participant.isLocal && (quality === 'poor' || quality === 'lost')) {
+        log('poor connection', quality);
+      }
+    };
+    const onError = (e: ErrorEvent) =>
+      log('page error', `${e.message} @ ${e.filename}:${e.lineno}`);
+    const onRejection = (e: PromiseRejectionEvent) => log('page error', String(e.reason));
+    room.on(RoomEvent.Disconnected, onDisconnected);
+    room.on(RoomEvent.Reconnecting, onReconnecting);
+    room.on(RoomEvent.Reconnected, onReconnected);
+    room.on(RoomEvent.ConnectionQualityChanged, onQuality);
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => {
+      room.off(RoomEvent.Disconnected, onDisconnected);
+      room.off(RoomEvent.Reconnecting, onReconnecting);
+      room.off(RoomEvent.Reconnected, onReconnected);
+      room.off(RoomEvent.ConnectionQualityChanged, onQuality);
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
+  }, [room]);
 }
 
 /** Keeps the laptop screen on for the whole ceremony. */
@@ -178,6 +220,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   programRef.current = { awards, settings };
 
   useScreenWakeLock();
+  useClientLog(room);
 
   // Tells Tina about media playing through the PA, so she doesn't take it for the host.
   const sendMedia = useCallback(

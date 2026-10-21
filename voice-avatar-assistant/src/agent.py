@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 import anthropic as anthropic_sdk
 from dotenv import load_dotenv
-from livekit import rtc
+from livekit import api, rtc
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -46,6 +46,7 @@ import store
 import travel
 from ceremony import CeremonyHost, CeremonyProgram
 from claude import HelperUsage
+from diagnostics import CallLog
 from prompts import (
     DEFAULT_STYLE,
     LANGUAGES,
@@ -163,6 +164,8 @@ def room_options(*, ceremony: bool) -> room_io.RoomOptions:
 
 
 AVATAR_JOIN_TIMEOUT_SECONDS = 20
+# Simli streams frames as soon as it joins; none within this long means it's stuck.
+AVATAR_VIDEO_TIMEOUT_SECONDS = 12
 
 
 AVATAR_KEYS = {"anam": "ANAM_API_KEY", "simli": "SIMLI_API_KEY"}
@@ -220,7 +223,47 @@ async def start_avatar(
     except (APIStatusError, APIConnectionError, TimeoutError) as e:
         logger.warning("%s avatar unavailable: %s", provider, e)
         return False
+    # Simli has joined and then sent no picture: check its video really starts (it
+    # streams frames even while silent), else drop it so the backup avatar can start.
+    if provider == "simli" and not await _sends_video(ctx, avatar.avatar_identity):
+        logger.warning("%s avatar sent no video; removing it", provider)
+        try:
+            await ctx.api.room.remove_participant(
+                api.RoomParticipantIdentity(
+                    room=ctx.room.name, identity=avatar.avatar_identity
+                )
+            )
+        except Exception as e:
+            logger.warning("could not remove the silent avatar: %s", e)
+        return False
     return True
+
+
+async def _sends_video(ctx: JobContext, identity: str) -> bool:
+    """True once the avatar's first video frame arrives (within the timeout)."""
+    deadline = time.monotonic() + AVATAR_VIDEO_TIMEOUT_SECONDS
+    track = None
+    while track is None and time.monotonic() < deadline:
+        participant = ctx.room.remote_participants.get(identity)
+        for publication in (
+            participant.track_publications.values() if participant else []
+        ):
+            if publication.kind == rtc.TrackKind.KIND_VIDEO and publication.track:
+                track = publication.track
+        if track is None:
+            await asyncio.sleep(0.2)
+    if track is None:
+        return False
+    stream = rtc.VideoStream(track)
+    try:
+        await asyncio.wait_for(
+            stream.__anext__(), max(0.5, deadline - time.monotonic())
+        )
+        return True
+    except (TimeoutError, StopAsyncIteration):
+        return False
+    finally:
+        await stream.aclose()
 
 
 async def send_ui(room: rtc.Room, topic: str, payload: dict[str, Any]) -> None:
@@ -604,6 +647,7 @@ async def run_ceremony(
     started_at: float,
     usage: HelperUsage,
     voice: str,
+    call_log: CallLog,
 ) -> None:
     """Award ceremony: get the approved awards from the browser, then host."""
     loop = asyncio.get_running_loop()
@@ -694,11 +738,13 @@ async def run_ceremony(
         {"type": "ceremony_live", "awards": len(program.awards)},
     )
 
-    async def finish_ceremony() -> None:
+    async def finish_ceremony(reason: str) -> None:
+        summary = call_log.summary(reason)
         await store.record_call(
             {
                 **record,
-                "status": "ok",
+                **summary,
+                "status": "error" if summary["ended_by"].startswith("error") else "ok",
                 "duration_s": round(time.time() - started_at, 1),
                 "awards_announced": sum(a.announced for a in program.awards),
                 "llm_model": MAIN_MODEL,
@@ -776,6 +822,11 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
     )
 
+    # Why the call ends, kept in its record (LiveKit doesn't keep the agent's logs).
+    call_log = CallLog(started_at)
+    call_log.add("host joined", identity=participant.identity)
+    call_log.watch(ctx.room, session)
+
     # Keep the follow-up window open while Tina talks and just after she finishes.
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
@@ -788,14 +839,23 @@ async def entrypoint(ctx: JobContext) -> None:
     for candidate in avatar_providers():
         if await start_avatar(candidate, session, ctx, long_event=is_ceremony):
             provider = candidate
+            call_log.add("avatar started", provider=candidate)
             break
         logger.warning("%s avatar failed; trying the backup", candidate)
+        call_log.add("avatar failed to start", provider=candidate)
     record["avatar_provider"] = provider
     if not provider:
         # Usually the provider's plan limit (concurrent sessions or free minutes):
         # tell the browser and end this call instead of leaving it spinning.
         await send_ui(ctx.room, UI_STATUS_TOPIC, {"type": "busy"})
-        await store.record_call({**record, "status": "busy", "duration_s": 0})
+        await store.record_call(
+            {
+                **record,
+                **call_log.summary("avatar unavailable"),
+                "status": "busy",
+                "duration_s": 0,
+            }
+        )
         ctx.shutdown("avatar unavailable")
         return
 
@@ -808,6 +868,7 @@ async def entrypoint(ctx: JobContext) -> None:
             started_at,
             usage,
             attributes.get("voice", ""),
+            call_log,
         )
         return
 
@@ -839,7 +900,7 @@ async def entrypoint(ctx: JobContext) -> None:
     )
     ctx.room.register_byte_stream_handler(FILE_UPLOAD_TOPIC, file_reader.on_stream)
 
-    async def finish_call() -> None:
+    async def finish_call(reason: str) -> None:
         await video.aclose()
         if visitor_id:
             transcript = memory.transcript_text(session.history)
@@ -852,10 +913,12 @@ async def entrypoint(ctx: JobContext) -> None:
                         await store.save_memory(visitor_id, note)
                 except anthropic_sdk.APIError as e:
                     logger.warning("failed to update memory: %s", e)
+        summary = call_log.summary(reason)
         await store.record_call(
             {
                 **record,
-                "status": "ok",
+                **summary,
+                "status": "error" if summary["ended_by"].startswith("error") else "ok",
                 "style": assistant.style,
                 "duration_s": round(time.time() - started_at, 1),
                 "searches": usage.searches,

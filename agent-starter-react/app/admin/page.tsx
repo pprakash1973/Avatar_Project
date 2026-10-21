@@ -148,12 +148,13 @@ export default async function AdminPage() {
                 <th className="px-3 py-2 text-right font-medium">Searches</th>
                 <th className="px-3 py-2 text-right font-medium">Files</th>
                 <th className="px-3 py-2 text-right font-medium">Est. cost</th>
+                <th className="px-3 py-2 font-medium">Ended</th>
               </tr>
             </thead>
             <tbody className="text-foreground">
               {calls.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="text-muted-foreground px-3 py-6 text-center">
+                  <td colSpan={8} className="text-muted-foreground px-3 py-6 text-center">
                     No calls recorded yet.
                   </td>
                 </tr>
@@ -185,6 +186,19 @@ export default async function AdminPage() {
                       </td>
                     </>
                   )}
+                  <td
+                    className={`px-3 py-2 text-xs ${call.status === 'error' ? 'text-destructive' : 'text-muted-foreground'}`}
+                    // Hover for the call's timeline.
+                    title={(call.events ?? [])
+                      .map((e) => {
+                        const { t, event, ...info } = e;
+                        const details = Object.values(info).join(', ');
+                        return `${t}s ${event}${details ? `: ${details}` : ''}`;
+                      })
+                      .join('\n')}
+                  >
+                    {call.ended_by ?? '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>
