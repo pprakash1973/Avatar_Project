@@ -36,6 +36,8 @@ class CallLog:
         # The first thing that ended the call, e.g. "host left: CLIENT_INITIATED".
         self.ended_by = ""
         self.errors = 0
+        # Set once the call's own record is set up to be saved at the end.
+        self.recorded = False
 
     def add(self, event: str, **info: Any) -> None:
         entry = {"t": round(time.time() - self._started_at, 1), "event": event, **info}

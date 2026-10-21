@@ -752,6 +752,7 @@ async def run_ceremony(
             }
         )
 
+    call_log.recorded = True
     ctx.add_shutdown_callback(finish_ceremony)
 
 
@@ -827,6 +828,21 @@ async def entrypoint(ctx: JobContext) -> None:
     call_log.add("host joined", identity=participant.identity)
     call_log.watch(ctx.room, session)
 
+    # A call that ends early (e.g. before the award list arrives) is still recorded;
+    # once the full record is set up (finish_call / finish_ceremony), it takes over.
+    async def record_early_end(reason: str) -> None:
+        if not call_log.recorded:
+            await store.record_call(
+                {
+                    **record,
+                    **call_log.summary(reason),
+                    "status": "ended early",
+                    "duration_s": round(time.time() - started_at, 1),
+                }
+            )
+
+    ctx.add_shutdown_callback(record_early_end)
+
     # Keep the follow-up window open while Tina talks and just after she finishes.
     @session.on("agent_state_changed")
     def _on_agent_state(ev) -> None:
@@ -848,6 +864,7 @@ async def entrypoint(ctx: JobContext) -> None:
         # Usually the provider's plan limit (concurrent sessions or free minutes):
         # tell the browser and end this call instead of leaving it spinning.
         await send_ui(ctx.room, UI_STATUS_TOPIC, {"type": "busy"})
+        call_log.recorded = True
         await store.record_call(
             {
                 **record,
@@ -931,6 +948,7 @@ async def entrypoint(ctx: JobContext) -> None:
             }
         )
 
+    call_log.recorded = True
     ctx.add_shutdown_callback(finish_call)
 
     session.say(build_greeting(user_name, language, returning=bool(memory_note)))
