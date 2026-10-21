@@ -6,6 +6,7 @@ import os
 import time
 from datetime import UTC, datetime
 from typing import Any, Literal
+from xml.sax.saxutils import escape as xml_escape
 
 import anthropic as anthropic_sdk
 from dotenv import load_dotenv
@@ -130,6 +131,14 @@ def make_ceremony_stt(languages: list[str]) -> stt.STT:
     )
 
 
+class AzureTTS(azure.TTS):
+    """The plugin puts the text into its SSML as-is, so an "&" (e.g. "Growth & Market
+    Impact") made Azure reject the sentence and Tina switch to the backup voice."""
+
+    def synthesize(self, text: str, **kwargs: Any) -> tts.ChunkedStream:
+        return super().synthesize(xml_escape(text), **kwargs)
+
+
 def make_tts(language: str, voice: str = "") -> tts.TTS:
     # Malayalam voices need Sonic 3.6; the other languages stay on the tested sonic-3.
     voice_cartesia = cartesia.TTS(
@@ -139,7 +148,7 @@ def make_tts(language: str, voice: str = "") -> tts.TTS:
     )
     if voice not in AZURE_VOICES or not os.environ.get("AZURE_SPEECH_KEY"):
         return voice_cartesia
-    voice_azure = azure.TTS(
+    voice_azure = AzureTTS(
         voice=AZURE_VOICES[voice], language=AZURE_LANGUAGES.get(language, "en-IN")
     )
     return tts.FallbackAdapter([voice_azure, voice_cartesia])
