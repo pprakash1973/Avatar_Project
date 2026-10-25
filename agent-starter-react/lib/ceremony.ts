@@ -108,6 +108,10 @@ export type MusicSource =
 /** A playable music link: YouTube / YouTube Music (with an optional start time such as
  * &t=45 or ?t=1m5s), or a direct audio file. null for anything else (e.g. Spotify). */
 export function parseMusicUrl(link: string): MusicSource | null {
+  // Music that ships with the app, e.g. /sounds/suspense_60s.mp3.
+  if (/^\/[\w\-./]+\.(mp3|m4a|aac|ogg|oga|opus|wav)$/i.test(link.trim())) {
+    return { kind: 'audio', url: link.trim() };
+  }
   let url: URL;
   try {
     url = new URL(link.trim());

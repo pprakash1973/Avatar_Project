@@ -1053,6 +1053,12 @@ export function CeremonySetup({
           the end (YouTube songs in a small player in the corner); &ldquo;Tina, stop the
           music&rdquo; or M stops it. Any other song is searched on YouTube instead.
         </p>
+        <p className="text-muted-foreground mb-3 text-xs">
+          Built in, for lucky draws and on-the-spot awards: &ldquo;Tina, play the suspense
+          music&rdquo; plays one of three one-minute suspense tracks (royalty-free, a different one
+          each time). While music or a video plays, &ldquo;Tina, louder&rdquo; or &ldquo;Tina,
+          softer&rdquo; changes its volume.
+        </p>
         <ul className="flex flex-col gap-3">
           {settings.songs.map((song, index) => (
             <li key={index} className="flex flex-col gap-1 rounded-lg border p-2">

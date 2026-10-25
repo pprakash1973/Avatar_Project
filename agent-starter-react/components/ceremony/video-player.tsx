@@ -8,12 +8,19 @@ import { useEffect, useRef } from 'react';
 export type StageVideo = { id: string; title: string; channel: string };
 
 /** Pause / play from Tina or the operator keys. */
-export type VideoControls = { pause: () => void; play: () => void; toggle: () => void };
+export type VideoControls = {
+  pause: () => void;
+  play: () => void;
+  toggle: () => void;
+  /** Louder (+) or softer (-) by `step` (0-1). */
+  changeVolume: (step: number) => void;
+};
 
 export type YTPlayer = {
   pauseVideo: () => void;
   playVideo: () => void;
   setVolume: (volume: number) => void;
+  getVolume: () => number;
   getPlayerState: () => number;
   destroy: () => void;
 };
@@ -110,6 +117,8 @@ export function VideoPlayer({ video, onEnded, onError, controlsRef, className }:
           player?.getPlayerState() === YT.PlayerState.PLAYING
             ? player.pauseVideo()
             : player?.playVideo(),
+        changeVolume: (step) =>
+          player?.setVolume(Math.min(100, Math.max(5, player.getVolume() + step * 100))),
       };
     });
     return () => {

@@ -9,6 +9,7 @@ import asyncio
 import difflib
 import json
 import logging
+import random
 import re
 import textwrap
 import time
@@ -63,6 +64,41 @@ VIDEO_CONTROLS: list[tuple[str, tuple[str, ...]]] = [
     ("play", ("play", "resume", "continue", "unpause", "தொடர")),
     ("stop", ("stop", "close", "end", "enough", "நிறுத்து")),
 ]
+# "Tina, louder" / "Tina, lower the volume" while music or a video plays. The plain
+# verbs (increase, lower...) count only next to a volume word, so "announce the
+# Revenue Increase award" isn't taken for one.
+VOLUME_WORDS: dict[str, tuple[str, ...]] = {
+    "up": (
+        "louder",
+        "turn up",
+        "turn it up",
+        "volume up",
+        "more volume",
+        "கூட்டு",
+        "ஏத்து",
+    ),
+    "down": (
+        "softer",
+        "quieter",
+        "turn down",
+        "turn it down",
+        "volume down",
+        "less volume",
+        "குறை",
+    ),
+}
+VOLUME_VERBS: dict[str, tuple[str, ...]] = {
+    "up": ("increase", "raise", "high", "அதிக"),
+    "down": ("decrease", "reduce", "lower", "low"),
+}
+VOLUME_NOUNS = ("volume", "music", "sound", "சத்தம", "சவுண்ட")
+# Built-in music for lucky draws and on-the-spot awards (frontend public/sounds),
+# one picked at random each time.
+SUSPENSE_TRACKS = (
+    "/sounds/suspense_drum_roll.mp3",
+    "/sounds/suspense_ticking_clock.mp3",
+    "/sounds/suspense_game_show.mp3",
+)
 DEFAULT_WINNER_PAUSE = 3.0
 # A first call that is only a greeting ("Hello Tina", "Good evening Tina").
 _SALUTATION_WORDS = {
@@ -200,6 +236,20 @@ def video_control(text: str) -> str | None:
     for action, words in VIDEO_CONTROLS:
         if any(f" {w}" in said for w in words):
             return action
+    return None
+
+
+def volume_change(text: str) -> str | None:
+    """up / down when the host asks for the music or video to be louder or softer."""
+    said = f" {_phrase(text)} "
+    if re.search(r"award|விருது", said):
+        return None
+    has_noun = any(f" {n}" in said for n in VOLUME_NOUNS)
+    for change in ("up", "down"):
+        if any(f" {w}" in said for w in VOLUME_WORDS[change]):
+            return change
+        if has_noun and any(f" {w}" in said for w in VOLUME_VERBS[change]):
+            return change
     return None
 
 
@@ -559,6 +609,8 @@ class CeremonyHost(Agent):
         self._media: set[str] = set()
         # When the current video started (the model must not stop it straight away).
         self._video_started = 0.0
+        # The suspense track played last, so the next one differs.
+        self._last_suspense = ""
         # The slide on screen, so a winner on the same slide isn't hidden again.
         self._shown_slide = 0
         # Not named _instructions: the Agent base class stores its text under that name.
@@ -696,6 +748,12 @@ class CeremonyHost(Agent):
         self._pending = ""
         if self._media:
             if not mentions_name(text):
+                raise StopResponse()
+            change = volume_change(text)
+            if change:
+                # "Tina, louder": adjust straight away and stay quiet over the music.
+                logger.info("volume %s", change)
+                await self._send_status({"type": "volume", "change": change})
                 raise StopResponse()
             if "video" in self._media and self._new_request(text):
                 # "Tina, the next award please" or "Tina, play Jai Ho": end the video
@@ -853,7 +911,9 @@ class CeremonyHost(Agent):
                 - Use show_slide when the host asks to show a particular slide (the title slide is slide one), and hide_slides when they ask to hide the slide or show you instead.
                 - Between awards, reply briefly and graciously if the host speaks to you, for example "Thank you!".
                 - If the host asks a general question (facts, news, sports scores, weather, a person or company), call web_search and answer in one or two short sentences. Never use web search to find award winners.
-                - When the host asks for one of the songs listed below by name ("Tina, play Jai Ho"), call play_song; it plays to the end. "Stop the music" calls stop_music.
+                - When the host asks for one of the songs listed below by name ("Tina, play Jai Ho"), call play_song; it plays to the end. Then say at most two words, e.g. "Enjoy, everyone!" "Stop the music" calls stop_music.
+                - For a lucky draw or an on-the-spot award, when the host asks for suspense music or a drum roll ("Tina, play the suspense music"), call play_suspense_music, then say one short, excited line, e.g. "Let's find out who the lucky one is!"
+                - When the host asks for the music or video to be louder or softer, call change_volume, then say at most two words, e.g. "Sure!"
                 - When the host asks you to play or show any other video, clip or song, call play_video with a short YouTube search query. While it plays you stay silent.
                 - Spell out numbers.
                 {host}{languages}
@@ -1094,9 +1154,33 @@ class CeremonyHost(Agent):
             return f"There is no song called {name}. The songs are: {names}. Say so briefly."
         logger.info("play_song: %s", song[0])
         await self._send_status({"type": "song", "name": song[0], "url": song[1]})
-        return (
-            f'{song[0]} is now playing. Say at most two words, e.g. "Enjoy, everyone!"'
+        return f"{song[0]} is now playing."
+
+    @function_tool()
+    async def play_suspense_music(self, ctx: RunContext) -> str:
+        """Play the suspense music (a one-minute build-up ending on a reveal) when the
+        host asks for suspense music, a drum roll or lucky draw music, e.g. before an
+        on-the-spot award or a lucky draw. It replaces any music or video playing."""
+        # A different track from last time.
+        url = random.choice(
+            [t for t in SUSPENSE_TRACKS if t != self._last_suspense] or SUSPENSE_TRACKS
         )
+        self._last_suspense = url
+        logger.info("play_suspense_music: %s", url)
+        await self._send_status({"type": "song", "name": "Suspense music", "url": url})
+        return "The suspense music is now playing."
+
+    @function_tool()
+    async def change_volume(
+        self, ctx: RunContext, direction: Literal["up", "down"]
+    ) -> str:
+        """Make the music or video louder (up) or softer (down) when the host asks.
+
+        Args:
+            direction: up for louder, down for softer.
+        """
+        await self._send_status({"type": "volume", "change": direction})
+        return "The volume is changed."
 
     @function_tool()
     async def stop_music(self, ctx: RunContext) -> str:

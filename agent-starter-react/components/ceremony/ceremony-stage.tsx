@@ -157,6 +157,8 @@ const REVEAL_FAILSAFE_MS = 15_000;
 // The first award's curtains: how long they take to open (matches globals.css), and,
 // without the suspense reveal, how long they stay closed on the slide.
 const CURTAIN_OPEN_MS = 2600;
+// How much "Tina, louder" / "softer" changes the music or video volume.
+const VOLUME_STEP = 0.2;
 const CURTAIN_CLOSED_MS = 1500;
 
 /** Red stage curtains over the first award's slide; they part when `opening`. */
@@ -418,6 +420,14 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
             endVideo();
           }
           musicRef.current.playSong(String(status.url || ''), String(status.name || ''));
+        } else if (status.type === 'volume') {
+          // "Tina, louder" / "Tina, softer": the video if one plays, else the music.
+          const step = status.change === 'down' ? -VOLUME_STEP : VOLUME_STEP;
+          if (viewRef.current === 'video' && videoControls.current) {
+            videoControls.current.changeVolume(step);
+          } else {
+            musicRef.current.changeVolume(step);
+          }
         } else if (status.type === 'music_stop') {
           musicRef.current.stop();
         } else if (status.type === 'suspense') {

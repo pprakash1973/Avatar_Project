@@ -46,6 +46,8 @@ export function useWalkupMusic(
   const fadeRef = useRef<number | null>(null);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const target = useRef(0);
+  // The volume the host asked for ("Tina, louder"); null: the setting.
+  const chosenVolume = useRef<number | null>(null);
   // The link of the music playing now ('' for the uploaded file).
   const current = useRef<string | null>(null);
   const speakingRef = useRef(tinaSpeaking);
@@ -141,7 +143,7 @@ export function useWalkupMusic(
   /** Plays `source` (`link` names it): for `seconds`, or to the end when null. */
   const play = useCallback(
     (source: MusicSource, link: string, seconds: number | null, title: string | null) => {
-      target.current = settings.walkup_volume;
+      target.current = chosenVolume.current ?? settings.walkup_volume;
       clearTimeout(stopTimerRef.current ?? undefined);
       stopTimerRef.current = seconds === null ? null : setTimeout(stop, seconds * 1000);
       setSong(title);
@@ -227,10 +229,36 @@ export function useWalkupMusic(
     }
   }, [tinaSpeaking, playing, fadeTo]);
 
+  /** Louder (+) or softer (-) by `step`, for this and the following music. */
+  const changeVolume = useCallback(
+    (step: number) => {
+      const volume = Math.min(
+        1,
+        Math.max(0.05, (chosenVolume.current ?? settings.walkup_volume) + step)
+      );
+      chosenVolume.current = volume;
+      if (playing) {
+        target.current = volume;
+        fadeTo(level());
+      }
+    },
+    [settings.walkup_volume, playing, fadeTo]
+  );
+
   const toggle = useCallback(
     (link?: string) => (playing ? stop() : start(link)),
     [playing, start, stop]
   );
 
-  return { playing, youtube, song, start, playSong, stop, toggle, onYouTubePlayer };
+  return {
+    playing,
+    youtube,
+    song,
+    start,
+    playSong,
+    stop,
+    toggle,
+    changeVolume,
+    onYouTubePlayer,
+  };
 }
