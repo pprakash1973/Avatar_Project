@@ -204,6 +204,8 @@ const REVEAL_FAILSAFE_MS = 15_000;
 // The first award's curtains: how long they take to open (matches globals.css), and,
 // without the suspense reveal, how long they stay closed on the slide.
 const CURTAIN_OPEN_MS = 2600;
+// After the reveal, the countdown music's final hit rings this long before fading.
+const COUNTDOWN_MUSIC_TAIL_MS = 2500;
 // How much "Tina, louder" / "softer" changes the music or video volume.
 const VOLUME_STEP = 0.2;
 const CURTAIN_CLOSED_MS = 1500;
@@ -363,6 +365,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
     setHiddenTitle(null);
     setCountdown(null);
     setRevealedAt(Date.now());
+    musicRef.current.endCountdown(COUNTDOWN_MUSIC_TAIL_MS);
     openCurtain();
   }, [openCurtain]);
 
@@ -482,7 +485,11 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         } else if (status.type === 'music_stop') {
           musicRef.current.stop();
         } else if (status.type === 'suspense') {
-          setCountdown({ seconds: Number(status.seconds) || 5, startedAt: Date.now() });
+          const seconds = Number(status.seconds) || 5;
+          setCountdown({ seconds, startedAt: Date.now() });
+          if (programRef.current.settings.suspense_music) {
+            musicRef.current.playCountdown(seconds);
+          }
         } else if (status.type === 'reveal') {
           reveal();
         } else if (status.type === 'video' && Array.isArray(status.videos)) {

@@ -6,6 +6,8 @@ import {
   type CeremonySettings,
   DEFAULT_WALKUP_MUSIC,
   type MusicSource,
+  SUSPENSE_HIT_SECONDS,
+  SUSPENSE_TRACKS,
   loadWalkupMusic,
   parseAwardMusic,
   parseMusicUrl,
@@ -201,6 +203,32 @@ export function useWalkupMusic(
     [play]
   );
 
+  // The countdown's suspense track last played, so the next one differs.
+  const lastCountdown = useRef('');
+
+  /** The countdown before a winner's name: a suspense track started so its final hit
+   * lands on the reveal, `seconds` from now. */
+  const playCountdown = useCallback(
+    (seconds: number) => {
+      const choices = SUSPENSE_TRACKS.filter((t) => t !== lastCountdown.current);
+      const track = choices[Math.floor(Math.random() * choices.length)];
+      lastCountdown.current = track;
+      const from = Math.max(0, SUSPENSE_HIT_SECONDS - seconds);
+      play({ kind: 'audio', url: `${track}#t=${from}` }, `countdown:${track}`, null, 'Suspense');
+    },
+    [play]
+  );
+
+  /** The name is out: let the hit ring under Tina's voice, then fade the countdown
+   * music (only that; the walk-up music may have started by then). */
+  const endCountdown = useCallback((afterMs: number) => {
+    setTimeout(() => {
+      if (current.current?.startsWith('countdown:')) {
+        stopRef.current();
+      }
+    }, afterMs);
+  }, []);
+
   const onYouTubePlayer = useCallback(
     (player: YTPlayer | null) => {
       if (!player) {
@@ -256,6 +284,8 @@ export function useWalkupMusic(
     song,
     start,
     playSong,
+    playCountdown,
+    endCountdown,
     stop,
     toggle,
     changeVolume,

@@ -727,6 +727,16 @@ export function CeremonySetup({
               />
               second countdown, then the name and the slide are revealed together
             </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.suspense_music}
+                disabled={!settings.suspense}
+                onChange={(e) => updateSettings({ suspense_music: e.target.checked })}
+              />
+              Suspense music during the countdown (royalty-free; its drum-roll hit lands on the
+              winner&rsquo;s name)
+            </label>
           </div>
           <div className="flex flex-col gap-2">
             <label className="flex items-center gap-2 text-sm">

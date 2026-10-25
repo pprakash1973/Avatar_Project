@@ -50,6 +50,8 @@ export type CeremonySettings = {
   suspense: boolean;
   /** The dramatic pause before the name, in seconds. */
   suspense_seconds: number;
+  /** Suspense music during that countdown, its final hit landing on the name. */
+  suspense_music: boolean;
   /** Play walk-up music after each winner (the built-in clap-along beat by default). */
   walkup: boolean;
   /** How long the music plays after the last winner of a category, in seconds. */
@@ -139,6 +141,14 @@ export function parseMusicUrl(link: string): MusicSource | null {
   return null;
 }
 
+/** Royalty-free suspense tracks made for Tina; each builds to a hit at SUSPENSE_HIT_SECONDS. */
+export const SUSPENSE_TRACKS = [
+  '/sounds/suspense_drum_roll.mp3',
+  '/sounds/suspense_ticking_clock.mp3',
+  '/sounds/suspense_game_show.mp3',
+];
+export const SUSPENSE_HIT_SECONDS = 56;
+
 /** Walk-up music when no other is set: a royalty-free clap-along beat made for Tina. */
 export const DEFAULT_WALKUP_MUSIC = '/sounds/clap_along_beat_30s.mp3';
 
@@ -202,6 +212,7 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   celebrate: true,
   suspense: true,
   suspense_seconds: 5,
+  suspense_music: true,
   walkup: true,
   walkup_seconds: 30,
   walkup_volume: 0.6,
