@@ -1,0 +1,57 @@
+# Deploys Tina's agent to LiveKit Cloud (`lk agent deploy`), run by hand from the
+# Actions tab or with `gh workflow run deploy-agent.yml`. Windows Smart App Control
+# blocks the unsigned lk.exe on the laptop, so the CLI runs here instead.
+#
+# Needs the repository secrets LIVEKIT_URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET.
+name: Deploy agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      secrets:
+        description: >-
+          Agent secrets to set first, space-separated KEY=VALUE pairs
+          (e.g. SIMLI_FACE_ID=... SIMLI_STREAM_SIZE=720x1280). Shown in the log:
+          only for values that aren't secret, such as face IDs.
+        required: false
+        default: ''
+      deploy:
+        description: Deploy the agent code
+        type: boolean
+        default: true
+
+concurrency:
+  group: deploy-agent
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: voice-avatar-assistant
+    env:
+      LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+      LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+      LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the LiveKit CLI
+        run: curl -sSL https://get.livekit.io/cli | bash
+
+      - name: Set agent secrets
+        if: ${{ inputs.secrets != '' }}
+        env:
+          PAIRS: ${{ inputs.secrets }}
+        # One --secrets per key: a comma-separated list saves only the first.
+        run: |
+          args=()
+          for pair in $PAIRS; do args+=(--secrets "$pair"); done
+          lk agent update-secrets "${args[@]}"
+
+      - name: Deploy
+        if: ${{ inputs.deploy }}
+        run: lk agent deploy
+
+      - name: Show the agent's secrets (names and update times)
+        run: lk agent secrets
