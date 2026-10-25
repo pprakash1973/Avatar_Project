@@ -33,9 +33,22 @@ import {
   type CeremonySettings,
   loadOvationPhoto,
 } from '@/lib/ceremony';
-import { type PDFDocumentProxy, renderPage } from '@/lib/pdf';
+import { type PDFDocumentProxy, type PageRender, renderPage } from '@/lib/pdf';
 
-function SlideCanvas({ deck, slide }: { deck: PDFDocumentProxy; slide: number }) {
+// A slide that fails to draw is tried again this many times, this far apart.
+const SLIDE_RETRIES = 3;
+const SLIDE_RETRY_MS = 400;
+
+/** The slide, fitted to its box; `redraw` changing draws it afresh ("reload the slide"). */
+function SlideCanvas({
+  deck,
+  slide,
+  redraw,
+}: {
+  deck: PDFDocumentProxy;
+  slide: number;
+  redraw: number;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -45,20 +58,54 @@ function SlideCanvas({ deck, slide }: { deck: PDFDocumentProxy; slide: number })
     if (!container || !canvas) {
       return;
     }
-    let cancelled = false;
-    const draw = () => {
-      if (!cancelled) {
-        void renderPage(deck, slide, canvas, container.clientWidth, container.clientHeight);
+    let stopped = false;
+    let current: PageRender | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    // One drawing at a time: a new one (resize, reload) cancels the last.
+    const draw = (attempt = 0) => {
+      clearTimeout(retry);
+      current?.cancel();
+      const { clientWidth: width, clientHeight: height } = container;
+      if (stopped || !width || !height) {
+        // Hidden: drawn when it's shown (the resize observer fires then).
+        return;
       }
+      const render = renderPage(deck, slide, width, height);
+      current = render;
+      render.done.then(
+        (image) => {
+          if (stopped || current !== render) {
+            return;
+          }
+          // Swap the finished drawing in, all at once.
+          const ratio = window.devicePixelRatio || 1;
+          canvas.width = image.width;
+          canvas.height = image.height;
+          canvas.style.width = `${Math.floor(image.width / ratio)}px`;
+          canvas.style.height = `${Math.floor(image.height / ratio)}px`;
+          canvas.getContext('2d')?.drawImage(image, 0, 0);
+        },
+        (error) => {
+          if (stopped || current !== render) {
+            return;
+          }
+          console.warn('slide did not draw', error);
+          if (attempt < SLIDE_RETRIES) {
+            retry = setTimeout(() => draw(attempt + 1), SLIDE_RETRY_MS);
+          }
+        }
+      );
     };
     draw();
-    const observer = new ResizeObserver(draw);
+    const observer = new ResizeObserver(() => draw());
     observer.observe(container);
     return () => {
-      cancelled = true;
+      stopped = true;
+      clearTimeout(retry);
+      current?.cancel();
       observer.disconnect();
     };
-  }, [deck, slide]);
+  }, [deck, slide, redraw]);
 
   return (
     <div ref={containerRef} className="flex size-full items-center justify-center">
@@ -261,6 +308,10 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   // stream tall (standing) or wide.
   const [tinaRatio, setTinaRatio] = useState(1);
   const [slideShownAt, setSlideShownAt] = useState(0);
+  // Bumped to draw the slide afresh ("Tina, the slide didn't come up", or L).
+  const [slideRedraw, setSlideRedraw] = useState(0);
+  const slideRef = useRef(slide);
+  slideRef.current = slide;
   // Start time of the current standing ovation (0: none).
   const [applauseAt, setApplauseAt] = useState(0);
   const [onHold, setOnHold] = useState(false);
@@ -450,6 +501,14 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           } else if (status.action === 'play') {
             videoControls.current?.play();
           }
+        } else if (status.type === 'slide_reload') {
+          // The slide came up wrong (blank, garbled, still blurred): show it afresh.
+          reveal();
+          setCurtain(null);
+          setSlideRedraw(Date.now());
+          showSlide();
+        } else if (status.type === 'slide_step') {
+          showSlide(slideRef.current + (Number(status.step) || 0));
         } else if (status.type === 'view') {
           if (status.view === 'tina') {
             setView('tina');
@@ -527,6 +586,11 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         showSlide(1);
       } else if (e.key.toLowerCase() === 's') {
         showSlide();
+      } else if (e.key.toLowerCase() === 'l') {
+        // Reload: the slide came up wrong.
+        reveal();
+        setSlideRedraw(Date.now());
+        showSlide();
       } else if (e.key.toLowerCase() === 'c') {
         setCorner((c) => (c + 1) % CORNERS.length);
       } else if (e.key.toLowerCase() === 't') {
@@ -574,7 +638,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           key={revealedAt}
           className={`size-full ${hiddenTitle !== null ? 'slide-hidden' : revealedAt ? 'slide-reveal' : ''}`}
         >
-          <SlideCanvas deck={deck} slide={slide} />
+          <SlideCanvas deck={deck} slide={slide} redraw={slideRedraw} />
         </div>
         {curtain && <Curtains opening={curtain === 'opening'} />}
         {hiddenTitle !== null && (
@@ -630,7 +694,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
       <div className="absolute top-3 left-3 rounded-full bg-black/60 px-3 py-1 text-xs text-white/90">
         {statusText} ·{' '}
         {view === 'slide'
-          ? `Slide ${slide}/${deck.numPages}`
+          ? `Slide ${slide}/${deck.numPages} (L: reload)`
           : view === 'video'
             ? `Video (E: ${videoLarge ? 'smaller' : 'enlarge'} · V: stop)`
             : 'Tina view (S: slide)'}

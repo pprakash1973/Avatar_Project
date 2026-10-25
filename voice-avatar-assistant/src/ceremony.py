@@ -177,6 +177,8 @@ _DANGLING_WORDS = {
     "okay",
     "so",
 }
+# Words before a trailing "please" that leave the request unfinished.
+_PLEASE_LEADS = {"you", "can", "could", "would", "will", "kindly"} | _DANGLING_WORDS
 # How long the host must stay silent after an unfinished request before Tina
 # answers what she heard.
 UNFINISHED_WAIT_SECONDS = 3.0
@@ -193,7 +195,13 @@ def unfinished(text: str) -> bool:
     words = _phrase(text).split()
     if not words:
         return False
-    if words[-1] in _DANGLING_WORDS:
+    if words[-1] == "please":
+        # "Tina, can you please ..." is unfinished; "announce the next award please"
+        # is a whole request (waiting on it delayed every polite request).
+        before = words[-2] if len(words) > 1 else ""
+        if not before or mentions_name(before) or before in _PLEASE_LEADS:
+            return True
+    elif words[-1] in _DANGLING_WORDS:
         return True
     # Just the name ("Tina", "hey Tina"): the request itself is still coming.
     rest = [w for w in words if not mentions_name(w) and w not in _DANGLING_WORDS]
@@ -941,6 +949,8 @@ class CeremonyHost(Agent):
                 - If the host asks for a category that isn't in the list, say so briefly and mention the closest category names.
                 - If a category is fully announced and the host asks for it again, confirm first; if they confirm, call announce_award with repeat set to true.
                 - Use show_slide when the host asks to show a particular slide (the title slide is slide one), and hide_slides when they ask to hide the slide or show you instead.
+                - You can't see the screen; trust the host about it. If the host says the slide didn't come up properly (blank, black, dark, garbled, upside down, still blurred, frozen) or asks to show, reload or refresh the slide again, call reload_slide, then say a few words, e.g. "Sorry about that, here it is again." Never repeat the announcement for this.
+                - For "the next slide" or "the previous slide", call change_slide. If the host says the wrong award's slide is up, call show_award_slide with the right category.
                 - Between awards, reply briefly and graciously if the host speaks to you, for example "Thank you!".
                 - If the host asks a general question (facts, news, sports scores, weather, a person or company), call web_search and answer in one or two short sentences. Never use web search to find award winners.
                 - When the host asks for one of the songs listed below by name ("Tina, play Jai Ho"), call play_song; it plays to the end. Then say at most two words, e.g. "Enjoy, everyone!" "Stop the music" calls stop_music.
@@ -1140,6 +1150,54 @@ class CeremonyHost(Agent):
         """
         await self._send_slide(max(1, slide_number))
         return f"Slide {slide_number} is on screen."
+
+    @function_tool()
+    async def reload_slide(self, ctx: RunContext) -> str:
+        """Show the current slide again, freshly drawn, when the host says it didn't
+        come up right: blank, black, garbled, upside down, blurred, stuck, or "show the
+        slide again". This never repeats an announcement."""
+        logger.info("reload_slide")
+        await self._send_status({"type": "slide_reload"})
+        return "The slide is shown again."
+
+    @function_tool()
+    async def change_slide(
+        self, ctx: RunContext, direction: Literal["next", "previous"]
+    ) -> str:
+        """Move one slide forward or back when the host asks for the next or the
+        previous slide, without announcing anything.
+
+        Args:
+            direction: next or previous.
+        """
+        logger.info("change_slide %s", direction)
+        await self._send_status(
+            {"type": "slide_step", "step": 1 if direction == "next" else -1}
+        )
+        return f"The {direction} slide is on screen."
+
+    @function_tool()
+    async def show_award_slide(self, ctx: RunContext, category: str) -> str:
+        """Show the slide of an award that has already been announced, without
+        announcing it again, e.g. "that's the wrong slide, show the Best Team slide".
+
+        Args:
+            category: The award category, as close to the list as possible.
+        """
+        matched = self._program.match(category)
+        if matched is None:
+            names = ", ".join(self._program.categories())
+            return f"No category matches {category!r}. Categories are: {names}."
+        announced = [a for a in self._program.entries(matched) if a.announced]
+        if not announced:
+            # Its slide shows the winner.
+            return (
+                f"{matched} hasn't been announced yet, so its slide stays hidden. "
+                "Offer to announce it instead."
+            )
+        logger.info("show_award_slide %s", matched)
+        await self._send_slide(announced[-1].slide)
+        return f"The {matched} slide is on screen."
 
     @function_tool()
     async def play_video(self, ctx: RunContext, query: str) -> str:
