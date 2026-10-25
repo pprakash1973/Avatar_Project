@@ -35,7 +35,7 @@ from livekit.agents.language import LanguageCode
 from livekit.agents.voice import SpeechHandle
 
 from claude import HELPER_MODEL, HelperUsage, get_client
-from wake_word import WakeWord, mentions_name
+from wake_word import WakeWord, mentions_name, name_in_english, without_name
 from web_search import run_web_search
 from youtube import search_videos
 
@@ -209,6 +209,8 @@ _SCRIPTS = {
     "ml": ("\u0d00", "\u0d7f"),
 }
 KeywordAction = Literal["repeat", "hold", "continue"]
+# Words around a keyword phrase that don't make it a longer request.
+_KEYWORD_FILLER = {"please", "ok", "okay", "now", "hey", "pls", "தயவுசெய்து"}
 DEFAULT_KEYWORDS: list[tuple[str, KeywordAction]] = [
     ("please repeat", "repeat"),
     ("repeat that", "repeat"),
@@ -376,6 +378,17 @@ class CeremonySettings:
             if phrase and f" {_phrase(phrase)} " in said:
                 return action
         return None
+
+    def only_keyword(self, text: str) -> bool:
+        """True if the host said just a keyword phrase ("Please hold", "Tina,
+        continue"), with nothing more than the name or a "please" around it."""
+        said = f" {_phrase(text)} "
+        for phrase, _ in sorted(self.keywords, key=lambda k: -len(k[0])):
+            if phrase and f" {_phrase(phrase)} " in said:
+                said = said.replace(f" {_phrase(phrase)} ", " ", 1)
+                break
+        rest = [w for w in said.split() if not mentions_name(w)]
+        return all(w in _KEYWORD_FILLER for w in rest)
 
     def song(self, name: str) -> tuple[str, str] | None:
         """The song the host asked for, tolerating small differences in the name."""
@@ -746,6 +759,46 @@ class CeremonyHost(Agent):
             new_message.content = [text]
             logger.info("joined a paused request: %s", text)
         self._pending = ""
+        # Speech-to-text may write the name in Tamil script ("டீனா, how are you?"):
+        # that doesn't make an English request Tamil.
+        language = script_language(without_name(text))
+        if language == "en" and script_language(text) != "en":
+            text = name_in_english(text)
+            new_message.content = [text]
+        if language in self._program.settings.conversation_languages:
+            self._host_language = language
+        settings = self._program.settings
+        action = settings.keyword(text)
+        # Over music or a video, a keyword counts only when it's all that was said
+        # ("please hold"), not inside a lyric or a longer sentence.
+        if self._media and action and not settings.only_keyword(text):
+            action = None
+        session = self.session
+        if self.on_hold:
+            if action == "continue":
+                logger.info("resumed")
+                self._resumed.set()
+                await self._send_status({"type": "hold", "on": False})
+                session.say(self._line(RESUME_REPLY), allow_interruptions=False)
+                self._wake.open()
+            raise StopResponse()
+        if action == "hold":
+            logger.info("on hold")
+            self._resumed.clear()
+            await self._send_status({"type": "hold", "on": True})
+            session.say(self._line(HOLD_REPLY), allow_interruptions=False)
+            raise StopResponse()
+        if action == "repeat":
+            logger.info("repeat")
+            if self._last_said:
+                self.say_parts(session, self._last_said)
+            else:
+                session.say(self._line(NOTHING_TO_REPEAT), allow_interruptions=False)
+            raise StopResponse()
+        if action == "continue" and settings.only_keyword(text):
+            # "Please continue" with nothing on hold: not a request to Tina (it once
+            # announced the next award).
+            raise StopResponse()
         if self._media:
             if not mentions_name(text):
                 raise StopResponse()
@@ -772,32 +825,6 @@ class CeremonyHost(Agent):
                         {"type": "video_control", "action": control}
                     )
                 raise StopResponse()
-        language = script_language(text)
-        if language in self._program.settings.conversation_languages:
-            self._host_language = language
-        action = self._program.settings.keyword(text)
-        session = self.session
-        if self.on_hold:
-            if action == "continue":
-                logger.info("resumed")
-                self._resumed.set()
-                await self._send_status({"type": "hold", "on": False})
-                session.say(self._line(RESUME_REPLY), allow_interruptions=False)
-                self._wake.extend()
-            raise StopResponse()
-        if action == "hold":
-            logger.info("on hold")
-            self._resumed.clear()
-            await self._send_status({"type": "hold", "on": True})
-            session.say(self._line(HOLD_REPLY), allow_interruptions=False)
-            raise StopResponse()
-        if action == "repeat":
-            logger.info("repeat")
-            if self._last_said:
-                self.say_parts(session, self._last_said)
-            else:
-                session.say(self._line(NOTHING_TO_REPEAT), allow_interruptions=False)
-            raise StopResponse()
         # In the hall Tina only reacts when called by name (plus a short follow-up window).
         if not self._wake.accepts(text):
             raise StopResponse()
@@ -806,7 +833,8 @@ class CeremonyHost(Agent):
             logger.info("first call: %s", text)
             parts, self._greeting = self._greeting, []
             self.say_parts(session, parts)
-            self._wake.extend()
+            # A greeting starts a conversation: follow-ups don't need the name.
+            self._wake.open()
             if just_salutation(text):
                 raise StopResponse()
             # Otherwise answer the request too, right after the greeting.
@@ -814,7 +842,7 @@ class CeremonyHost(Agent):
             logger.info("waiting for the rest of: %s", text)
             self._pending = text
             self._pending_at = time.monotonic()
-            self._wake.extend()
+            self._wake.open()
             self._pending_task = asyncio.create_task(self._answer_pending_later())
             raise StopResponse()
 
@@ -844,7 +872,11 @@ class CeremonyHost(Agent):
     def say_parts(
         self, session: AgentSession, parts: list[tuple[str, str]]
     ) -> SpeechHandle | None:
-        """Says each (language, text) in turn; other languages use their own voice model."""
+        """Says each (language, text) in turn; other languages use their own voice model.
+
+        These are approved texts (introduction, greeting, welcome note), not a
+        conversation: afterwards the host calls Tina by name again."""
+        self._wake.close()
         handle = None
         for language, text in parts:
             if language == "en":
@@ -964,6 +996,9 @@ class CeremonyHost(Agent):
         logger.info(
             "announcing %s: %s (slide %d)", award.category, award.winner, award.slide
         )
+        # After an announcement the MC turns to the audience and the winner: Tina
+        # waits to be called by name again.
+        self._wake.close()
         settings = self._program.settings
         lead, reveal = settings.announcement_parts(award)
         # A new slide: hide the winner until Tina says the name. Further winners on

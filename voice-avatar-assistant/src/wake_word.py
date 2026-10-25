@@ -17,30 +17,49 @@ def mentions_name(text: str) -> bool:
     return bool(_NAME_RE.search(text or ""))
 
 
+def without_name(text: str) -> str:
+    return _NAME_RE.sub(" ", text or "")
+
+
+def name_in_english(text: str) -> str:
+    """The name as "Tina", e.g. when speech-to-text wrote it in Tamil script."""
+    return _NAME_RE.sub(AVATAR_NAME, text or "")
+
+
 class WakeWord:
     """Tracks whether the user is currently talking to Tina.
 
     Saying her name opens a window of ``window_seconds``; it is extended while
     she is talking and restarts when she finishes, so follow-ups don't need the
-    name again.
+    name again. After close() it stays shut, even while she talks, until her name
+    is heard again.
     """
 
     def __init__(self, *, enabled: bool, window_seconds: float = 20.0) -> None:
         self.enabled = enabled
         self._window = window_seconds
         self._open_until = 0.0
+        self._closed = False
 
     def accepts(self, text: str) -> bool:
         if not self.enabled:
             return True
         if mentions_name(text):
-            self.extend()
+            self.open()
             return True
         return time.monotonic() < self._open_until
 
     def close(self) -> None:
         """Ends the follow-up window: the next request needs her name again."""
         self._open_until = 0.0
+        self._closed = True
+
+    def open(self) -> None:
+        """Opens the follow-up window, even after close()."""
+        self._closed = False
+        self.extend()
 
     def extend(self) -> None:
-        self._open_until = time.monotonic() + self._window
+        """Keeps the follow-up window open (while she talks), unless closed."""
+        if not self._closed:
+            self._open_until = time.monotonic() + self._window

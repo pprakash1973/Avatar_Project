@@ -176,6 +176,8 @@ def room_options(*, ceremony: bool) -> room_io.RoomOptions:
 AVATAR_JOIN_TIMEOUT_SECONDS = 20
 # Simli streams frames as soon as it joins; none within this long means it's stuck.
 AVATAR_VIDEO_TIMEOUT_SECONDS = 12
+# Ceremony: how long after Tina's reply the MC may follow up without her name.
+CEREMONY_FOLLOW_UP_SECONDS = 8.0
 # Ceremony: the pause between Tina appearing and her introduction.
 INTRODUCTION_DELAY_SECONDS = 1.5
 
@@ -842,7 +844,12 @@ async def entrypoint(ctx: JobContext) -> None:
     if is_ceremony:
         language = "en"
     # In a ceremony Tina must ignore the hall unless called; elsewhere it's optional.
-    wake = WakeWord(enabled=is_ceremony or attributes.get("wake") == "1")
+    # On stage the MC soon turns to the audience, so follow-ups without her name are
+    # taken only briefly after she replies.
+    wake = WakeWord(
+        enabled=is_ceremony or attributes.get("wake") == "1",
+        window_seconds=CEREMONY_FOLLOW_UP_SECONDS if is_ceremony else 20.0,
+    )
 
     usage = HelperUsage()
     record: dict[str, Any] = {
