@@ -22,11 +22,13 @@ export type Award = {
 export type CeremonySettings = {
   /** Seconds between the winners of one category (all are announced together). */
   pause_seconds: number;
-  /** Tina's first words, when the host first calls her; {name} is the host's name. */
+  /** Said as soon as Tina appears, before the host speaks (empty: she waits silently). */
+  introduction: string;
+  /** Tina's reply when the host first calls her; {name} is the host's name. */
   greeting: string;
   /** Read word-for-word when the host asks for the welcome note. */
   welcome_note: string;
-  /** Languages the greeting is spoken in, in order; English uses `greeting` itself. */
+  /** Languages the introduction and greeting are spoken in, in order; English uses the text itself. */
   greeting_languages: LanguageCode[];
   /** The greeting in the other languages; an empty one is translated when Tina joins. */
   greeting_translations: Translations;
@@ -167,6 +169,7 @@ const TAMIL_KEYWORDS: Keyword[] = [
 
 export const DEFAULT_SETTINGS: CeremonySettings = {
   pause_seconds: 3,
+  introduction: 'Hello, I am Tina, your AI avatar assistant. I am ready to support you.',
   greeting: 'Hi {name}, good day! I am happy to be your co-host.',
   welcome_note:
     'Good evening, esteemed UST leaders and dear colleagues. A warm welcome to the PACS Annual ' +

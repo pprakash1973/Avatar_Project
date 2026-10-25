@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 from xml.sax.saxutils import escape as xml_escape
@@ -175,9 +176,30 @@ def room_options(*, ceremony: bool) -> room_io.RoomOptions:
 AVATAR_JOIN_TIMEOUT_SECONDS = 20
 # Simli streams frames as soon as it joins; none within this long means it's stuck.
 AVATAR_VIDEO_TIMEOUT_SECONDS = 12
+# Ceremony: the pause between Tina appearing and her introduction.
+INTRODUCTION_DELAY_SECONDS = 1.5
 
 
 AVATAR_KEYS = {"anam": "ANAM_API_KEY", "simli": "SIMLI_API_KEY"}
+
+
+@dataclass
+class FramedSimliConfig(simli.SimliConfig):
+    """Adds the video size Trinity-2 faces stream at (they show the upper body, so
+    the frame can be wide or tall), e.g. SIMLI_STREAM_SIZE=1280x720."""
+
+    stream_size: str = ""
+
+    def create_json(self) -> dict[str, Any]:
+        result = super().create_json()
+        # SIMLI_EMOTION_ID=none: a face without emotions takes just its ID.
+        if self.emotion_id == "none":
+            result["faceId"] = self.face_id
+        if self.stream_size:
+            width, height = (int(n) for n in self.stream_size.lower().split("x"))
+            result["streaming_width"] = width
+            result["streaming_height"] = height
+        return result
 
 
 def avatar_providers() -> list[str]:
@@ -196,7 +218,7 @@ async def start_avatar(
     """Starts the avatar and waits for it to join; False if it isn't available."""
     if provider == "simli":
         avatar = simli.AvatarSession(
-            simli_config=simli.SimliConfig(
+            simli_config=FramedSimliConfig(
                 api_key=os.environ["SIMLI_API_KEY"],
                 face_id=os.environ["SIMLI_FACE_ID"],
                 # Trinity faces: the expression between sentences. Happy #0 by default;
@@ -208,6 +230,10 @@ async def start_avatar(
                 # runs 30-45 minutes with breaks of a few minutes between awards.
                 max_session_length=(75 if long_event else 15) * 60,
                 max_idle_time=(10 if long_event else 3) * 60,
+                # The ceremony stage fits any shape; the call page shows a square.
+                stream_size=os.environ.get("SIMLI_STREAM_SIZE", "")
+                if long_event
+                else "",
             ),
         )
     else:
@@ -710,6 +736,7 @@ async def run_ceremony(
         make_tts=lambda language: make_tts(language, voice),
         usage=usage,
         wake=wake,
+        host_name=record.get("name", ""),
     )
 
     async def read_event(reader: rtc.TextStreamReader) -> None:
@@ -729,10 +756,18 @@ async def run_ceremony(
     await session.start(
         agent=host, room=ctx.room, room_options=room_options(ceremony=True)
     )
-    # Tina smiles silently on screen; her first words, the greeting in each chosen
-    # language, come when the host first calls her ("Hello Tina").
+    # Tina introduces herself as soon as she appears (non-interruptible, so the host
+    # waits for it); she greets the host by name when they first call her ("Hello Tina").
     settings = program.settings
     host_name = record.get("name", "")
+    if settings.introduction:
+        introduction = await host.multilingual(
+            settings.introduction, settings.greeting_languages, {}, lambda text: text
+        )
+        # Give the stage a moment to show her video before she speaks.
+        await asyncio.sleep(INTRODUCTION_DELAY_SECONDS)
+        call_log.add("introduction")
+        host.say_parts(session, introduction)
     host.greet_on_first_call(
         await host.multilingual(
             settings.greeting,

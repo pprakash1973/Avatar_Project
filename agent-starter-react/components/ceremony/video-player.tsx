@@ -68,9 +68,12 @@ interface VideoPlayerProps {
   /** The video can't be played (removed, not embeddable): try the next result. */
   onError: () => void;
   controlsRef: React.RefObject<VideoControls | null>;
+  /** Where the player sits: a small corner window, or `absolute inset-0` for full screen. */
+  className: string;
 }
 
-export function VideoPlayer({ video, onEnded, onError, controlsRef }: VideoPlayerProps) {
+export function VideoPlayer({ video, onEnded, onError, controlsRef, className }: VideoPlayerProps) {
+  const full = className.includes('inset-0');
   const hostRef = useRef<HTMLDivElement>(null);
   const callbacks = useRef({ onEnded, onError });
   callbacks.current = { onEnded, onError };
@@ -117,10 +120,14 @@ export function VideoPlayer({ video, onEnded, onError, controlsRef }: VideoPlaye
   }, [video.id, controlsRef]);
 
   return (
-    <div className="absolute inset-0 bg-black">
-      <div ref={hostRef} className="size-full" />
-      <div className="pointer-events-none absolute top-3 left-1/2 max-w-[60vw] -translate-x-1/2 truncate rounded-full bg-black/60 px-3 py-1 text-xs text-white/80">
-        {video.title} · {video.channel} · V: stop · N: next result · Space: pause
+    // The same elements in both sizes, so resizing keeps the video playing.
+    <div
+      className={`${className} flex flex-col overflow-hidden bg-black transition-all duration-500`}
+    >
+      <div ref={hostRef} className={full ? 'min-h-0 flex-1' : 'aspect-video w-full'} />
+      <div className="truncate px-2 py-1 text-[10px] text-white/70">
+        {video.title} · {video.channel} · E: {full ? 'smaller' : 'enlarge'} · V: stop · N: next
+        result · Space: pause
       </div>
     </div>
   );

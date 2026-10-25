@@ -134,6 +134,20 @@ function useScreenWakeLock() {
 }
 
 // Positions for Tina's small window while a slide is shown (cycled with C).
+type Shape = 'tall' | 'square' | 'wide';
+const shape = (ratio: number): Shape => (ratio < 0.8 ? 'tall' : ratio > 1.25 ? 'wide' : 'square');
+// Tina in the middle: a standing (tall) Tina leaves room for a video window beside her.
+const TINA_LARGE_SIZE: Record<Shape, string> = {
+  tall: 'h-[84vh]',
+  square: 'h-[72vh] max-w-[90vw]',
+  wide: 'w-[58vw]',
+};
+const TINA_CORNER_SIZE: Record<Shape, string> = {
+  tall: 'h-[32vh] min-h-40',
+  square: 'w-[13vw] min-w-28',
+  wide: 'w-[20vw] min-w-40',
+};
+
 const CORNERS = ['right-3 bottom-3', 'right-3 top-3', 'left-3 top-12', 'left-3 bottom-16'];
 
 // How long the announcement slide stays up before Tina returns to the middle.
@@ -181,13 +195,15 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   const [isLive, setIsLive] = useState(false);
   // 'tina': Tina large in the middle (default, and during breaks).
   // 'slide': the slide fills the screen and Tina moves to the corner.
-  // 'video': a YouTube video fills the screen, Tina in the corner.
+  // 'video': Tina large in the middle, a YouTube video in a small corner window
+  // (E enlarges it to fill the screen, Tina then in the corner).
   const [view, setView] = useState<'tina' | 'slide' | 'video'>('tina');
   const viewRef = useRef(view);
   viewRef.current = view;
   // Search results for the video on screen; N plays the next one.
   const [videos, setVideos] = useState<StageVideo[]>([]);
   const [videoIndex, setVideoIndex] = useState(0);
+  const [videoLarge, setVideoLarge] = useState(false);
   const videoControls = useRef<VideoControls | null>(null);
   // Suspense: the award title over a blurred slide until Tina says the winner's name.
   const [hiddenTitle, setHiddenTitle] = useState<string | null>(null);
@@ -195,6 +211,9 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   const [revealedAt, setRevealedAt] = useState(0);
   // Corner for Tina's small window over slides; C moves it if it covers a face or text.
   const [corner, setCorner] = useState(0);
+  // Tina's video shape (width / height): square for classic faces; Trinity-2 faces
+  // stream tall (standing) or wide.
+  const [tinaRatio, setTinaRatio] = useState(1);
   const [slideShownAt, setSlideShownAt] = useState(0);
   // Start time of the current standing ovation (0: none).
   const [applauseAt, setApplauseAt] = useState(0);
@@ -250,6 +269,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   const endVideo = useCallback(() => {
     setVideos([]);
     setVideoIndex(0);
+    setVideoLarge(false);
     setView('tina');
     sendMedia('video', false);
   }, [sendMedia]);
@@ -411,6 +431,9 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         } else if (e.key.toLowerCase() === 'n') {
           nextVideo();
           return;
+        } else if (e.key.toLowerCase() === 'e') {
+          setVideoLarge((large) => !large);
+          return;
         } else if (e.key === ' ') {
           e.preventDefault();
           videoControls.current?.toggle();
@@ -445,6 +468,12 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
     return () => window.removeEventListener('keydown', onKey);
   }, [slide, showSlide, view, endVideo, nextVideo, reveal]);
 
+  // Tina fills the middle unless a slide (or an enlarged video) takes the screen.
+  const tinaInCorner = view === 'slide' || (view === 'video' && videoLarge);
+  // Videos and music cards go in a corner Tina isn't using.
+  const mediaCorner =
+    tinaInCorner && CORNERS[corner].includes('right') ? 'left-3 bottom-16' : 'right-3 bottom-3';
+
   const statusText = !isConnected
     ? connectionState === 'disconnected'
       ? 'Disconnected'
@@ -455,7 +484,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
 
   return (
     <div className="fixed inset-0 z-40 overflow-hidden bg-black">
-      {view === 'tina' && (
+      {!tinaInCorner && (
         // Slow, soft stage lights behind Tina.
         <div aria-hidden className="pointer-events-none absolute inset-0 opacity-60">
           <div className="stage-light absolute -top-1/4 -left-1/4 size-[70vmax] rounded-full bg-[radial-gradient(circle,rgb(168_85_247/0.35),transparent_60%)]" />
@@ -487,18 +516,33 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           onEnded={endVideo}
           onError={nextVideo}
           controlsRef={videoControls}
+          className={
+            videoLarge
+              ? 'absolute inset-0'
+              : `absolute ${mediaCorner} z-10 w-[30vw] min-w-72 rounded-xl shadow-2xl ring-1 ring-white/20`
+          }
         />
       )}
 
       {videoTrack && (
         <div
+          style={{ aspectRatio: tinaRatio }}
           className={`${
-            view !== 'tina'
-              ? `absolute ${CORNERS[corner]} w-[13vw] min-w-28 overflow-hidden rounded-lg shadow-2xl ring-1 ring-white/20 transition-all duration-500`
-              : 'absolute top-1/2 left-1/2 aspect-square h-[72vh] max-w-[90vw] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl shadow-2xl ring-1 ring-white/20 transition-all duration-500'
+            tinaInCorner
+              ? `absolute ${CORNERS[corner]} ${TINA_CORNER_SIZE[shape(tinaRatio)]} overflow-hidden rounded-lg shadow-2xl ring-1 ring-white/20 transition-all duration-500`
+              : `absolute top-1/2 left-1/2 ${TINA_LARGE_SIZE[shape(tinaRatio)]} -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl shadow-2xl ring-1 ring-white/20 transition-all duration-500`
           } ${agent.state === 'speaking' && settings.style === 'lively' ? 'speaking-glow ring-amber-300/60' : ''}`}
         >
-          <VideoTrack trackRef={videoTrack} className="aspect-square size-full object-cover" />
+          <VideoTrack
+            trackRef={videoTrack}
+            className="size-full object-cover"
+            onResize={(e) => {
+              const { videoWidth, videoHeight } = e.currentTarget;
+              if (videoWidth && videoHeight) {
+                setTinaRatio(videoWidth / videoHeight);
+              }
+            }}
+          />
         </div>
       )}
 
@@ -507,7 +551,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         {view === 'slide'
           ? `Slide ${slide}/${deck.numPages}`
           : view === 'video'
-            ? 'Video'
+            ? `Video (E: ${videoLarge ? 'smaller' : 'enlarge'} · V: stop)`
             : 'Tina view (S: slide)'}
         {onHold && ' · On hold (say “continue”)'}
         {music.playing && ` · ${music.song ? `♪ ${music.song}` : 'Music'} (M: stop)`}
@@ -521,6 +565,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           onPlayer={music.onYouTubePlayer}
           onEnded={music.stop}
           title={music.song ?? 'Walk-up music'}
+          className={`fixed ${mediaCorner} z-50`}
         />
       )}
 
@@ -551,7 +596,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         <Button
           variant="secondary"
           onClick={() => setCorner((c) => (c + 1) % CORNERS.length)}
-          disabled={view === 'tina'}
+          disabled={!tinaInCorner}
         >
           Move Tina (C)
         </Button>

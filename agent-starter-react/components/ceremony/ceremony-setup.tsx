@@ -527,8 +527,8 @@ export function CeremonySetup({
             disabled={isStarting}
           />
           <label className="text-muted-foreground text-xs">
-            Host name (Tina smiles silently until the host says “Hello Tina”, then greets them by
-            name)
+            Host name (Tina introduces herself when she appears; when the host then says “Hello
+            Tina”, she greets them by name)
             <input
               className={inputClassName}
               value={hostName}
@@ -540,7 +540,30 @@ export function CeremonySetup({
             />
           </label>
           <label className="text-muted-foreground text-xs">
-            Opening greeting ({'{name}'} is replaced by the host name)
+            Introduction (Tina says this as soon as she appears; the host waits for it. Leave empty
+            for no introduction)
+            <textarea
+              rows={2}
+              className={inputClassName}
+              value={settings.introduction}
+              onChange={(e) => updateSettings({ introduction: e.target.value })}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => void hear('introduction', settings.introduction)}
+            disabled={!settings.introduction || speaking !== null}
+            className="text-muted-foreground hover:text-foreground -mt-2 flex items-center gap-1 self-start text-xs"
+          >
+            {speaking === 'introduction' ? (
+              <CircleNotchIcon className="size-3.5 animate-spin" />
+            ) : (
+              <SpeakerHighIcon className="size-3.5" />
+            )}
+            Hear the introduction
+          </button>
+          <label className="text-muted-foreground text-xs">
+            Greeting when the host first calls Tina ({'{name}'} is replaced by the host name)
             <textarea
               rows={2}
               className={inputClassName}

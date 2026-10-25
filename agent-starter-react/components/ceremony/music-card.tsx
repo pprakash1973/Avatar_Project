@@ -66,7 +66,7 @@ export function MusicCard({
 
   return (
     <div
-      className={`${className} w-[min(22vw,320px)] min-w-[200px] overflow-hidden rounded-xl bg-black shadow-2xl ring-1 ring-white/20`}
+      className={`${className} w-[min(16vw,240px)] min-w-[160px] overflow-hidden rounded-xl bg-black shadow-2xl ring-1 ring-white/20`}
     >
       <div ref={hostRef} className="aspect-video w-full" />
       <div className="truncate px-2 py-1 text-[10px] text-white/70">♪ {title}</div>

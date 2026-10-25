@@ -40,6 +40,10 @@ from youtube import search_videos
 
 logger = logging.getLogger("agent.ceremony")
 
+# Tina's first words, as soon as she appears; the host waits for them.
+DEFAULT_INTRODUCTION = (
+    "Hello, I am Tina, your AI avatar assistant. I am ready to support you."
+)
 # {name} is replaced by the host's name.
 DEFAULT_GREETING = "Hi {name}, good day! I am happy to be your co-host."
 DEFAULT_WELCOME_NOTE = (
@@ -257,6 +261,8 @@ class CeremonySettings:
     # Several winners in a category are announced one after another, each with its
     # slide, this many seconds apart.
     pause_seconds: float = DEFAULT_WINNER_PAUSE
+    # Said once when Tina appears (empty: she waits silently for the host).
+    introduction: str = DEFAULT_INTRODUCTION
     greeting: str = DEFAULT_GREETING
     welcome_note: str = DEFAULT_WELCOME_NOTE
     # Languages the greeting / welcome note are spoken in, in order; English uses the
@@ -365,6 +371,7 @@ class CeremonyProgram:
             pause_seconds=min(
                 max(float(raw.get("pause_seconds", DEFAULT_WINNER_PAUSE)), 1), 30
             ),
+            introduction=str(raw.get("introduction", DEFAULT_INTRODUCTION)).strip(),
             greeting=str(raw.get("greeting") or DEFAULT_GREETING).strip(),
             welcome_note=str(raw.get("welcome_note") or DEFAULT_WELCOME_NOTE).strip(),
             greeting_languages=_languages(raw.get("greeting_languages")),
@@ -515,8 +522,11 @@ class CeremonyHost(Agent):
         make_tts,
         usage: HelperUsage,
         wake: WakeWord,
+        host_name: str = "",
     ) -> None:
         self._program = program
+        # The human host, whom Tina addresses by name.
+        self._host_name = host_name.strip()
         self._send_slide = send_slide
         self._send_view = send_view
         self._send_status = send_status
@@ -529,8 +539,8 @@ class CeremonyHost(Agent):
         # "please hold": ignore everything but a continue phrase until resumed.
         self._resumed = asyncio.Event()
         self._resumed.set()
-        # Tina smiles silently until the host first calls her ("Hello Tina"), then
-        # gives this greeting: (language, text) pairs.
+        # After her introduction Tina waits for the host's first call ("Hello Tina"),
+        # then greets them by name: (language, text) pairs.
         self._greeting: list[tuple[str, str]] = []
         # The start of a request the host hasn't finished, and when it was heard.
         self._pending = ""
@@ -846,11 +856,12 @@ class CeremonyHost(Agent):
                 - When the host asks for one of the songs listed below by name ("Tina, play Jai Ho"), call play_song; it plays to the end. "Stop the music" calls stop_music.
                 - When the host asks you to play or show any other video, clip or song, call play_video with a short YouTube search query. While it plays you stay silent.
                 - Spell out numbers.
-                {languages}
+                {host}{languages}
                 # Award categories, in presentation order
                 """
             )
             .replace("{style}", HOST_STYLES[self._program.settings.style])
+            .replace("{host}", self._host_rule())
             .replace("{languages}", self._language_rule())
             + categories
             + "\n\n# Songs the host can ask for by name\n"
@@ -859,6 +870,14 @@ class CeremonyHost(Agent):
                 or "- (none)"
             )
             + "\n"
+        )
+
+    def _host_rule(self) -> str:
+        if not self._host_name:
+            return ""
+        return (
+            f"- The host's name is {self._host_name}. Address them by name now and then, "
+            f'for example "Sure, {self._host_name}!", but not in every reply.\n'
         )
 
     def _language_rule(self) -> str:
