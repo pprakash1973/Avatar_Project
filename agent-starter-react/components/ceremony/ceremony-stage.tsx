@@ -154,8 +154,48 @@ const CORNERS = ['right-3 bottom-3', 'right-3 top-3', 'left-3 top-12', 'left-3 b
 const SLIDE_HOLD_MS = 2 * 60 * 1000;
 // A hidden winner is revealed anyway after this long (if the reveal never arrives).
 const REVEAL_FAILSAFE_MS = 15_000;
+// The first award's curtains: how long they take to open (matches globals.css), and,
+// without the suspense reveal, how long they stay closed on the slide.
+const CURTAIN_OPEN_MS = 2600;
+const CURTAIN_CLOSED_MS = 1500;
+
+/** Red stage curtains over the first award's slide; they part when `opening`. */
+function Curtains({ opening }: { opening: boolean }) {
+  return (
+    <div
+      aria-hidden
+      className={`pointer-events-none absolute inset-0 overflow-hidden ${opening ? 'curtains-opening' : ''}`}
+    >
+      <div className="curtain curtain-left" />
+      <div className="curtain curtain-right" />
+      <div className="curtain-valance" />
+    </div>
+  );
+}
 
 /** The drum-roll countdown (3, 2, 1) during the pause before the winner's name. */
+// The award title types in within this long, at most this fast per letter.
+const TYPING_MS = 1800;
+const TYPING_LETTER_MS = 70;
+
+/** The award title typed in letter by letter, in gold, with a blinking caret. */
+function TypedTitle({ text }: { text: string }) {
+  const [typed, setTyped] = useState(0);
+  useEffect(() => {
+    const step = Math.min(TYPING_LETTER_MS, TYPING_MS / Math.max(1, text.length));
+    const timer = setInterval(() => setTyped((n) => (n >= text.length ? n : n + 1)), step);
+    return () => clearInterval(timer);
+  }, [text]);
+  return (
+    <span className="text-amber-300">
+      {text.slice(0, typed)}
+      <span className="typing-caret" />
+      {/* The rest, invisible, so the centred title doesn't shift while it types. */}
+      <span className="invisible">{text.slice(typed)}</span>
+    </span>
+  );
+}
+
 function Countdown({ seconds, startedAt }: { seconds: number; startedAt: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -209,6 +249,10 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   const [hiddenTitle, setHiddenTitle] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<{ seconds: number; startedAt: number } | null>(null);
   const [revealedAt, setRevealedAt] = useState(0);
+  // The first award opens with stage curtains (once per ceremony); later awards use
+  // only the blur reveal.
+  const [curtain, setCurtain] = useState<'closed' | 'opening' | null>(null);
+  const curtainUsed = useRef(false);
   // Corner for Tina's small window over slides; C moves it if it covers a face or text.
   const [corner, setCorner] = useState(0);
   // Tina's video shape (width / height): square for classic faces; Trinity-2 faces
@@ -260,11 +304,23 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   // The music link of the winner last announced: M plays it.
   const lastMusic = useRef('');
 
+  const openCurtain = useCallback(() => setCurtain((c) => (c === 'closed' ? 'opening' : c)), []);
+
   const reveal = useCallback(() => {
     setHiddenTitle(null);
     setCountdown(null);
     setRevealedAt(Date.now());
-  }, []);
+    openCurtain();
+  }, [openCurtain]);
+
+  // Once open, the curtains are gone for the rest of the ceremony.
+  useEffect(() => {
+    if (curtain !== 'opening') {
+      return;
+    }
+    const timer = setTimeout(() => setCurtain(null), CURTAIN_OPEN_MS);
+    return () => clearTimeout(timer);
+  }, [curtain]);
 
   const endVideo = useCallback(() => {
     setVideos([]);
@@ -339,6 +395,15 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           setIsLive(true);
         } else if (status.type === 'slide') {
           showSlide(Number(status.slide) || 1);
+          // Award slides carry their category; the first one opens with curtains, on
+          // the winner's name (or shortly, without the suspense reveal).
+          if (status.title && !curtainUsed.current) {
+            curtainUsed.current = true;
+            setCurtain('closed');
+            if (!status.hidden) {
+              setTimeout(openCurtain, CURTAIN_CLOSED_MS);
+            }
+          }
           if (status.hidden) {
             // A new award: the music of the last one makes way.
             musicRef.current.stop();
@@ -410,7 +475,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
       }
     });
     return () => room.unregisterTextStreamHandler(UI_STATUS_TOPIC);
-  }, [room, showSlide, reveal, sendMedia, endVideo, nextVideo]);
+  }, [room, showSlide, reveal, openCurtain, sendMedia, endVideo, nextVideo]);
 
   useEffect(() => {
     if (!isConnected) {
@@ -501,10 +566,16 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         >
           <SlideCanvas deck={deck} slide={slide} />
         </div>
+        {curtain && <Curtains opening={curtain === 'opening'} />}
         {hiddenTitle !== null && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 text-center">
             <p className="max-w-[80vw] text-[6vh] font-semibold text-white drop-shadow-lg">
-              {hiddenTitle}
+              {curtain ? (
+                hiddenTitle
+              ) : (
+                // Awards after the first (which has the curtains): the title types in.
+                <TypedTitle key={hiddenTitle} text={hiddenTitle} />
+              )}
             </p>
             {countdown && <Countdown seconds={countdown.seconds} startedAt={countdown.startedAt} />}
           </div>

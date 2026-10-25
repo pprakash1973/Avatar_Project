@@ -4,8 +4,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { YTPlayer } from '@/components/ceremony/video-player';
 import {
   type CeremonySettings,
+  DEFAULT_WALKUP_MUSIC,
   type MusicSource,
   loadWalkupMusic,
+  parseAwardMusic,
   parseMusicUrl,
 } from '@/lib/ceremony';
 import { getSavedSpeakerId } from '@/lib/visitor';
@@ -24,7 +26,7 @@ export type YouTubeMusic = { id: string; start: number };
 
 /**
  * Walk-up music after each winner: start(link) plays the winner's music link (else the
- * general link or the uploaded file), fades it in and keeps it going for further winners
+ * general link, the uploaded file or the built-in clap-along beat), fades it in and keeps it going for further winners
  * with the same music; a different link switches track. It
  * ducks under Tina's voice and fades out `walkup_seconds` after the last start(), or
  * straight away on stop().
@@ -169,18 +171,19 @@ export function useWalkupMusic(
     [settings.walkup_volume, playing, stop, fadeTo, audioOutput]
   );
 
-  /** Plays the winner's music link, else the general link, else the uploaded file. */
+  /** Plays the winner's music link, else the general link, else the uploaded file, else
+   * the built-in clap-along beat. YouTube links are skipped: not royalty-free. */
   const start = useCallback(
     (link = '') => {
       if (!settings.walkup) {
         return;
       }
-      const chosen = [link, settings.walkup_url].find((l) => parseMusicUrl(l)) ?? '';
-      const source: MusicSource | null =
-        parseMusicUrl(chosen) ?? (file ? { kind: 'audio', url: file } : null);
-      if (source) {
-        play(source, chosen, settings.walkup_seconds, null);
-      }
+      const chosen = [link, settings.walkup_url].find((l) => parseAwardMusic(l)) ?? '';
+      const source: MusicSource = parseAwardMusic(chosen) ?? {
+        kind: 'audio',
+        url: file ?? DEFAULT_WALKUP_MUSIC,
+      };
+      play(source, chosen, settings.walkup_seconds, null);
     },
     [settings.walkup, settings.walkup_url, settings.walkup_seconds, file, play]
   );

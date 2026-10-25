@@ -14,8 +14,8 @@ export type Award = {
   script: string;
   /** 1-based slide number shown while announcing. */
   slide: number;
-  /** Optional music link (YouTube / YouTube Music / audio file) played after this
-   * winner's congratulations; otherwise the general walk-up music. */
+  /** Optional music link (an audio file such as .mp3) played after this winner's
+   * congratulations; otherwise the general walk-up music. */
   music?: string;
 };
 
@@ -50,14 +50,14 @@ export type CeremonySettings = {
   suspense: boolean;
   /** The dramatic pause before the name, in seconds. */
   suspense_seconds: number;
-  /** Play the walk-up music (if one was uploaded) after each winner. */
+  /** Play walk-up music after each winner (the built-in clap-along beat by default). */
   walkup: boolean;
   /** How long the music plays after the last winner of a category, in seconds. */
   walkup_seconds: number;
   /** Music volume, 0-1. */
   walkup_volume: number;
-  /** General walk-up music link (YouTube / YouTube Music / audio file); the uploaded
-   * file is used when this is empty. An announcement's own music link comes first. */
+  /** General walk-up music link (an audio file); the uploaded file, else the built-in
+   * clap-along beat, is used when this is empty. An announcement's own link comes first. */
   walkup_url: string;
   /** Songs the host can ask for by name ("Tina, play Jai Ho"), e.g. during a break. */
   songs: Song[];
@@ -135,6 +135,16 @@ export function parseMusicUrl(link: string): MusicSource | null {
   return null;
 }
 
+/** Walk-up music when no other is set: a royalty-free clap-along beat made for Tina. */
+export const DEFAULT_WALKUP_MUSIC = '/sounds/clap_along_beat_30s.mp3';
+
+/** Music for the award presentation: audio files only. YouTube music isn't royalty-free,
+ * so it's not played after winners (songs the host asks for during breaks still can be). */
+export function parseAwardMusic(link: string): MusicSource | null {
+  const source = parseMusicUrl(link);
+  return source?.kind === 'audio' ? source : null;
+}
+
 /** An award's announcement as Tina says it, including the congratulations. */
 export const announcementFor = (settings: CeremonySettings, award: Award) =>
   [award.script.trim(), congratulationsFor(settings, award.winner)].filter(Boolean).join(' ');
@@ -189,7 +199,7 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   suspense: true,
   suspense_seconds: 5,
   walkup: true,
-  walkup_seconds: 15,
+  walkup_seconds: 30,
   walkup_volume: 0.6,
   walkup_url: '',
   songs: [],
@@ -252,6 +262,10 @@ function migrate(saved: Record<string, unknown>): CeremonySettings {
   if ('multi_winner' in saved) {
     delete (settings as Record<string, unknown>).multi_winner;
     settings.pause_seconds = DEFAULT_SETTINGS.pause_seconds;
+  }
+  // The walk-up music used to play for 15 seconds; the clap-along beat runs 30.
+  if (saved.walkup_seconds === 15) {
+    settings.walkup_seconds = DEFAULT_SETTINGS.walkup_seconds;
   }
   // Music links per category were replaced by a link per announcement.
   delete (settings as Record<string, unknown>).award_music;

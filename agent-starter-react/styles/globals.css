@@ -127,30 +127,60 @@
 
 /* Ceremony: the ovation photo rises along the bottom, then sinks (applause-crowd.tsx). */
 @keyframes ovation-rise {
-  0% { transform: translateY(100%); }
-  15% { transform: translateY(0); }
-  85% { transform: translateY(0); }
-  100% { transform: translateY(100%); }
+  0% {
+    transform: translateY(100%);
+  }
+  15% {
+    transform: translateY(0);
+  }
+  85% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(100%);
+  }
 }
 @keyframes ovation-sway {
-  from { transform: scale(1.02) translateY(0); }
-  to { transform: scale(1.04) translateY(-1%); }
+  from {
+    transform: scale(1.02) translateY(0);
+  }
+  to {
+    transform: scale(1.04) translateY(-1%);
+  }
 }
-.ovation { animation: ovation-rise 5s ease-in-out forwards; }
-.ovation-photo { animation: ovation-sway 0.6s ease-in-out infinite alternate; }
+.ovation {
+  animation: ovation-rise 5s ease-in-out forwards;
+}
+.ovation-photo {
+  animation: ovation-sway 0.6s ease-in-out infinite alternate;
+}
 
 /* Ceremony: slow stage lights behind Tina, and a glow while she speaks. */
 @keyframes stage-light {
-  0% { transform: translate(-10%, 0) scale(1); }
-  50% { transform: translate(10%, -6%) scale(1.15); }
-  100% { transform: translate(-10%, 0) scale(1); }
+  0% {
+    transform: translate(-10%, 0) scale(1);
+  }
+  50% {
+    transform: translate(10%, -6%) scale(1.15);
+  }
+  100% {
+    transform: translate(-10%, 0) scale(1);
+  }
 }
 @keyframes speaking-glow {
-  from { box-shadow: 0 0 30px 4px rgb(251 191 36 / 0.25); }
-  to { box-shadow: 0 0 70px 14px rgb(251 191 36 / 0.5); }
+  from {
+    box-shadow: 0 0 30px 4px rgb(251 191 36 / 0.25);
+  }
+  to {
+    box-shadow: 0 0 70px 14px rgb(251 191 36 / 0.5);
+  }
 }
-.stage-light { animation: stage-light 14s ease-in-out infinite; }
-.speaking-glow { animation: speaking-glow 0.9s ease-in-out infinite alternate; }
+.stage-light {
+  animation: stage-light 14s ease-in-out infinite;
+}
+.speaking-glow {
+  animation: speaking-glow 0.9s ease-in-out infinite alternate;
+}
 /* Suspense: the slide is hidden until Tina says the winner's name. */
 .slide-hidden {
   filter: blur(28px) brightness(0.45);
@@ -191,6 +221,133 @@
   animation: suspense-pulse 1s ease-out forwards;
 }
 
+/* The first award: red velvet stage curtains that part on the winner's name. */
+.curtain {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 51%;
+  background:
+    linear-gradient(
+      to bottom,
+      rgb(0 0 0 / 0.35),
+      transparent 25%,
+      transparent 75%,
+      rgb(0 0 0 / 0.5)
+    ),
+    repeating-linear-gradient(
+      90deg,
+      #4a070c 0,
+      #8a1320 2.5vw,
+      #c22a38 4vw,
+      #8a1320 5.5vw,
+      #4a070c 8vw
+    );
+}
+.curtain::after {
+  /* Gold fringe along the hem. */
+  content: '';
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2.2vh;
+  background: repeating-linear-gradient(90deg, #f5d27a 0, #b8860b 0.4vw, #f5d27a 0.8vw);
+}
+.curtain-left {
+  left: 0;
+  transform-origin: left center;
+  box-shadow: inset -2vw 0 3vw rgb(0 0 0 / 0.45);
+}
+.curtain-right {
+  right: 0;
+  transform-origin: right center;
+  box-shadow: inset 2vw 0 3vw rgb(0 0 0 / 0.45);
+}
+.curtain-valance {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 12vh;
+  background: repeating-linear-gradient(90deg, #5c0a12 0, #a3182a 3vw, #5c0a12 6vw);
+  border-bottom: 1.2vh solid #d4a52a;
+  border-radius: 0 0 40% 40% / 0 0 35% 35%;
+  box-shadow: 0 1.5vh 3vh rgb(0 0 0 / 0.6);
+}
+@keyframes curtain-open-left {
+  0% {
+    transform: translateX(0) scaleX(1);
+  }
+  12% {
+    transform: translateX(-1.5%) scaleX(1);
+  }
+  100% {
+    transform: translateX(-100%) scaleX(0.4);
+  }
+}
+@keyframes curtain-open-right {
+  0% {
+    transform: translateX(0) scaleX(1);
+  }
+  12% {
+    transform: translateX(1.5%) scaleX(1);
+  }
+  100% {
+    transform: translateX(100%) scaleX(0.4);
+  }
+}
+@keyframes valance-lift {
+  0%,
+  55% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(-110%);
+  }
+}
+/* 2.6 s: CURTAIN_OPEN_MS in ceremony-stage.tsx. */
+.curtains-opening .curtain-left {
+  animation: curtain-open-left 2.6s cubic-bezier(0.6, 0, 0.3, 1) forwards;
+}
+.curtains-opening .curtain-right {
+  animation: curtain-open-right 2.6s cubic-bezier(0.6, 0, 0.3, 1) forwards;
+}
+.curtains-opening .curtain-valance {
+  animation: valance-lift 2.6s ease-in forwards;
+}
+/* Later awards: the title types in, with a blinking caret. */
+.typing-caret {
+  display: inline-block;
+  width: 0.08em;
+  height: 0.9em;
+  margin: 0 0.04em;
+  vertical-align: -0.08em;
+  background: currentColor;
+  animation: typing-caret 0.8s steps(1) infinite;
+}
+@keyframes typing-caret {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes curtains-fade {
+  to {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .stage-light, .speaking-glow, .ovation-photo, .slide-reveal, .suspense-pulse { animation: none; }
+  .stage-light,
+  .speaking-glow,
+  .ovation-photo,
+  .slide-reveal,
+  .suspense-pulse,
+  .typing-caret {
+    animation: none;
+  }
+  .curtains-opening .curtain-left,
+  .curtains-opening .curtain-right,
+  .curtains-opening .curtain-valance {
+    animation: none;
+  }
+  .curtains-opening {
+    animation: curtains-fade 0.6s ease-out forwards;
+  }
 }

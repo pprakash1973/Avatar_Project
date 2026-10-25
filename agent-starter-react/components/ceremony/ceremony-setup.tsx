@@ -31,6 +31,7 @@ import {
   loadDeck,
   loadOvationPhoto,
   loadWalkupMusic,
+  parseAwardMusic,
   parseMusicUrl,
   saveAwards,
   saveDeck,
@@ -483,7 +484,8 @@ export function CeremonySetup({
                   />
                 </label>
                 <div className="text-muted-foreground text-xs md:col-span-3">
-                  Music URL (optional): plays for {settings.walkup_seconds} seconds after &ldquo;
+                  Music URL (optional, an .mp3 link): plays for {settings.walkup_seconds} seconds
+                  after &ldquo;
                   {congratulationsFor(settings, award.winner) || 'the announcement'}
                   &rdquo;
                   <MusicLink
@@ -491,6 +493,7 @@ export function CeremonySetup({
                     onChange={(music) => setField(index, 'music', music || undefined)}
                     settings={settings}
                     emptyLabel="General walk-up music"
+                    audioOnly
                   />
                 </div>
               </div>
@@ -737,7 +740,7 @@ export function CeremonySetup({
             <div className="flex flex-wrap items-center gap-3 text-xs">
               {musicName && <span className="font-medium">{musicName}</span>}
               <label className="border-input hover:bg-accent cursor-pointer rounded-full border px-3 py-1.5 font-medium">
-                {musicName ? 'Replace music' : 'Add music (MP3, optional)'}
+                {musicName ? 'Replace music' : 'Use your own music (MP3, optional)'}
                 <input
                   type="file"
                   accept="audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,audio/ogg"
@@ -802,20 +805,21 @@ export function CeremonySetup({
               {Math.round(settings.walkup_volume * 100)}%
             </label>
             <span className="text-muted-foreground text-xs">
-              Use instrumental music you have the rights to: lyrics through the PA can reach
+              Without your own music, Tina plays her built-in clap-along beat (royalty-free). Use
+              instrumental music you have the rights to: lyrics through the PA can reach
               Tina&rsquo;s microphone. It softens while Tina speaks and fades out on its own; M on
               the stage starts or stops it.
             </span>
             <label className="text-muted-foreground text-xs">
-              Or a music link (YouTube / YouTube Music, or an .mp3 link; add &amp;t=45 to start at
-              0:45). Used instead of the uploaded music; YouTube shows a small player in the corner
-              of the screen, as YouTube requires.
+              Or a link to an audio file (.mp3), used instead of the uploaded music. YouTube links
+              aren&rsquo;t played after winners, as YouTube music isn&rsquo;t royalty-free.
             </label>
             <MusicLink
               value={settings.walkup_url}
               onChange={(walkup_url) => updateSettings({ walkup_url })}
               settings={settings}
-              emptyLabel={musicName ? 'Uploaded music' : 'No music'}
+              emptyLabel={musicName ? 'Uploaded music' : 'Clap-along beat'}
+              audioOnly
             />
           </div>
           <p className="text-muted-foreground text-xs">
@@ -1279,14 +1283,17 @@ function MusicLink({
   onChange,
   settings,
   emptyLabel,
+  audioOnly = false,
 }: {
   value: string;
   onChange: (link: string) => void;
   settings: CeremonySettings;
   /** What plays when the link is empty. */
   emptyLabel: string;
+  /** Award music: audio files only (YouTube isn't royalty-free). */
+  audioOnly?: boolean;
 }) {
-  const source = parseMusicUrl(value);
+  const source = audioOnly ? parseAwardMusic(value) : parseMusicUrl(value);
   const [testing, setTesting] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // A test plays as long as the music would after a winner.
@@ -1322,7 +1329,11 @@ function MusicLink({
         <input
           className={`${inputClassName} min-w-56 flex-1`}
           value={value}
-          placeholder="https://music.youtube.com/watch?v=… or https://…/song.mp3"
+          placeholder={
+            audioOnly
+              ? 'https://…/music.mp3'
+              : 'https://music.youtube.com/watch?v=… or https://…/song.mp3'
+          }
           onChange={(e) => {
             setTesting(false);
             onChange(e.target.value.trim());
@@ -1339,7 +1350,9 @@ function MusicLink({
               ? `YouTube${source.start ? ` from ${source.start}s` : ''}`
               : source
                 ? 'Audio file'
-                : 'Not playable: use a YouTube or .mp3 link'}
+                : audioOnly && parseMusicUrl(value)?.kind === 'youtube'
+                  ? 'YouTube is not played after winners (not royalty-free): use an .mp3 link'
+                  : `Not playable: use ${audioOnly ? 'an' : 'a YouTube or'} .mp3 link`}
         </span>
         {source && (
           <button
