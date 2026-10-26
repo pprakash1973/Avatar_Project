@@ -744,6 +744,7 @@ async def run_ceremony(
         usage=usage,
         wake=wake,
         host_name=record.get("name", ""),
+        note=call_log.turn,
     )
 
     async def read_event(reader: rtc.TextStreamReader) -> None:

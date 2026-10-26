@@ -16,6 +16,10 @@ from livekit.protocol import models
 logger = logging.getLogger("agent.diagnostics")
 
 MAX_EVENTS = 40
+# The conversation, briefly (an hour's ceremony): what Tina heard, what she decided, the
+# tools she used and what she said, to explain "Tina didn't respond" afterwards.
+MAX_TURNS = 300
+TURN_TEXT_CHARS = 120
 
 
 def _kind(participant: rtc.RemoteParticipant) -> str:
@@ -55,8 +59,20 @@ class CallLog:
         # The first thing that ended the call, e.g. "host left: CLIENT_INITIATED".
         self.ended_by = ""
         self.errors = 0
+        self.turns: list[dict[str, Any]] = []
         # Set once the call's own record is set up to be saved at the end.
         self.recorded = False
+
+    def turn(self, kind: str, **info: Any) -> None:
+        """One step of the conversation, e.g. ("heard", text=...) or ("ignored", reason=...)."""
+        if len(self.turns) >= MAX_TURNS:
+            # Keep the latest: the end of a long ceremony matters most.
+            del self.turns[0]
+        if isinstance(info.get("text"), str):
+            info["text"] = info["text"][:TURN_TEXT_CHARS]
+        self.turns.append(
+            {"t": round(time.time() - self._started_at, 1), "kind": kind, **info}
+        )
 
     def add(self, event: str, **info: Any) -> None:
         entry = {"t": round(time.time() - self._started_at, 1), "event": event, **info}
@@ -124,6 +140,26 @@ class CallLog:
             self.add("agent disconnected", reason=name)
             self._ended(f"room closed: {name}")
 
+        @session.on("user_input_transcribed")
+        def _heard(ev) -> None:
+            if ev.is_final and ev.transcript.strip():
+                self.turn("heard", text=ev.transcript.strip())
+
+        @session.on("overlapping_speech")
+        def _overlap(ev) -> None:
+            # Someone spoke while Tina was speaking; not an interruption means LiveKit
+            # took it for a reaction and may drop those words.
+            self.turn("talked over Tina", interruption=bool(ev.is_interruption))
+
+        @session.on("function_tools_executed")
+        def _tools(ev) -> None:
+            self.turn("tools", names=[c.name for c in ev.function_calls])
+
+        @session.on("conversation_item_added")
+        def _said(ev) -> None:
+            if getattr(ev.item, "role", None) == "assistant":
+                self.turn("said", text=(ev.item.text_content or "").strip())
+
         @session.on("error")
         def _error(ev) -> None:
             self.errors += 1
@@ -155,4 +191,5 @@ class CallLog:
             "shutdown_reason": shutdown_reason,
             "errors": self.errors,
             "events": self.events,
+            "turns": self.turns,
         }

@@ -203,9 +203,14 @@ def unfinished(text: str) -> bool:
             return True
     elif words[-1] in _DANGLING_WORDS:
         return True
-    # Just the name ("Tina", "hey Tina"): the request itself is still coming.
+    # Just the name ("Tina", "hey Tina"): the request itself is still coming. Also after
+    # words to the audience ("We have our leaders gathered here. Tina,"): answering that
+    # straight away talked over the request, and those words were lost.
+    stripped = text.strip()
+    if not stripped.endswith((".", "!", "?", "।")):
+        words = _phrase(re.split(r"[.!?।]", stripped)[-1]).split()
     rest = [w for w in words if not mentions_name(w) and w not in _DANGLING_WORDS]
-    return mentions_name(text) and not rest
+    return any(mentions_name(w) for w in words) and not rest
 
 
 DEFAULT_CONGRATULATIONS = "Congratulations, {winner}!"
@@ -360,7 +365,7 @@ Members of the audience come to the stage and ask you anything that comes to min
 - Answer every question with warmth and light, good-natured humour, in one to three short sentences; a playful line is welcome, but keep it respectful and never at anyone's expense.
 - Use web_search for current facts.
 - If a question touches sensitive information, reply exactly: "Sorry, I cannot answer that." Sensitive: personal details about real people (salaries, phone numbers, addresses, health, relationships), confidential company, client or deal information, the award winners, passwords or security, and divisive topics (politics, religion, caste) or anything offensive.
-- If what you hear isn't meant for you (applause, chatter, someone talking to the audience), reply with one word at most, e.g. "Ha!"
+- If what you hear isn't meant for you (applause, chatter, someone talking to the audience), call not_for_me and say nothing.
 - When the host ends Ask AI ("Tina, end Ask AI", "thank you all, let's move on"), call end_ask_ai.
 """
 
@@ -735,10 +740,15 @@ class CeremonyHost(Agent):
         usage: HelperUsage,
         wake: WakeWord,
         host_name: str = "",
+        note=None,
     ) -> None:
         self._program = program
         # The human host, whom Tina addresses by name.
         self._host_name = host_name.strip()
+        # Records what Tina decided about each turn in the call record: note(kind, **info).
+        self._note = note or (lambda kind, **info: None)
+        # The host's latest words, as Tina understood them.
+        self._last_turn = ""
         self._send_slide = send_slide
         self._send_view = send_view
         self._send_status = send_status
@@ -932,6 +942,7 @@ class CeremonyHost(Agent):
             new_message.content = [text]
         if language in self._program.settings.conversation_languages:
             self._host_language = language
+        self._last_turn = text
         settings = self._program.settings
         action = settings.keyword(text)
         # Over music or a video, or in an audience question during Ask AI, a keyword
@@ -947,7 +958,8 @@ class CeremonyHost(Agent):
                 await self._send_status({"type": "hold", "on": False})
                 session.say(self._line(RESUME_REPLY), allow_interruptions=False)
                 self._wake.open()
-            raise StopResponse()
+                raise StopResponse()
+            raise self._ignored("on hold")
         if action == "hold":
             logger.info("on hold")
             self._resumed.clear()
@@ -967,7 +979,7 @@ class CeremonyHost(Agent):
             raise StopResponse()
         if self._media:
             if not mentions_name(text):
-                raise StopResponse()
+                raise self._ignored("music or video playing, no name")
             change = volume_change(text)
             if change:
                 # "Tina, louder": adjust straight away and stay quiet over the music.
@@ -997,12 +1009,13 @@ class CeremonyHost(Agent):
             if len(words) <= ASK_AI_CHATTER_MAX_WORDS and all(
                 w in ASK_AI_CHATTER for w in words
             ):
-                raise StopResponse()
+                raise self._ignored("chatter")
             await self._trim_history(turn_ctx)
+            self._note("answering")
             return
         # In the hall Tina only reacts when called by name (plus a short follow-up window).
         if not self._wake.accepts(text):
-            raise StopResponse()
+            raise self._ignored("not called by name")
         if self._greeting:
             # The host's first call: Tina's first words are the greeting.
             logger.info("first call: %s", text)
@@ -1019,8 +1032,14 @@ class CeremonyHost(Agent):
             self._pending_at = time.monotonic()
             self._wake.open()
             self._pending_task = asyncio.create_task(self._answer_pending_later())
-            raise StopResponse()
+            raise self._ignored("waiting for the rest")
         await self._trim_history(turn_ctx)
+        self._note("answering")
+
+    def _ignored(self, reason: str) -> StopResponse:
+        """A turn Tina doesn't answer, noted in the call record."""
+        self._note("ignored", reason=reason)
+        return StopResponse()
 
     async def _trim_history(self, turn_ctx: llm.ChatContext) -> None:
         """Keeps an hour-long ceremony's replies fast: once the conversation is long, only
@@ -1132,6 +1151,7 @@ class CeremonyHost(Agent):
                 - For "the next slide" or "the previous slide", call change_slide. If the host says the wrong award's slide is up, call show_award_slide with the right category.
                 - When the host says to end, close or wrap up the award ceremony, call end_ceremony. If it reports awards not yet announced, remind the host of them in one short sentence and ask whether to end anyway. If the host says to end again or confirms, call end_ceremony again: the host's decision is final, so never remind twice.
                 - Between awards, reply briefly and graciously if the host speaks to you, for example "Thank you!".
+                - The host often speaks to the audience rather than to you, e.g. "We have our leaders and associates gathered here", introducing guests or announcing a break. If the host's latest words weren't said to you and don't use your name, call not_for_me and say nothing; never answer a remark made to the audience.
                 - If the host asks a general question (facts, news, sports scores, weather, a person or company), call web_search and answer in one or two short sentences. Never use web search to find award winners.
                 - When the host asks for one of the songs listed below by name ("Tina, play Jai Ho"), call play_song; it plays to the end. Then say at most two words, e.g. "Enjoy, everyone!" "Stop the music" calls stop_music.
                 - For a lucky draw or an on-the-spot award, when the host asks for suspense music or a drum roll ("Tina, play the suspense music"), call play_suspense_music, then say one short, excited line, e.g. "Let's find out who the lucky one is!"
@@ -1597,6 +1617,16 @@ class CeremonyHost(Agent):
         """Hide the slide and show Tina large on the screen, e.g. "Tina, hide the slide"."""
         await self._send_view("tina")
         return "Tina is now shown full screen."
+
+    @function_tool()
+    async def not_for_me(self, ctx: RunContext) -> str:
+        """Stay silent: the latest words were said to the audience or someone else, not
+        to you (e.g. "We have our leaders gathered here"), or were chatter or applause."""
+        if mentions_name(self._last_turn):
+            # Called by name: never stay silent (a request said over Tina once got lost).
+            return "They said your name, so this is for you: respond to their request."
+        self._note("ignored", reason="not for Tina (her judgement)")
+        raise StopResponse()
 
     @function_tool()
     async def end_ceremony(self, ctx: RunContext) -> str:
