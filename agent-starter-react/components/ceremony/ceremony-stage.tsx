@@ -305,7 +305,12 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   // Each award's slide opens with stage curtains (further winners on it don't).
   const [curtain, setCurtain] = useState<'closed' | 'opening' | null>(null);
   // The event Tina is opening ("Lamp Lighting"), typed in above her.
-  const [eventTitle, setEventTitle] = useState<{ name: string; at: number } | null>(null);
+  // sticky: kept up until the event ends (Ask AI), not just for EVENT_TITLE_MS.
+  const [eventTitle, setEventTitle] = useState<{
+    name: string;
+    at: number;
+    sticky?: boolean;
+  } | null>(null);
   // The slide the curtains last opened on: further winners on it (a team) don't get them.
   const curtainSlide = useRef(0);
   // The award title was just typed above Tina (its introduction): not typed again.
@@ -438,7 +443,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   }, [view, slideShownAt]);
 
   useEffect(() => {
-    if (!eventTitle) {
+    if (!eventTitle || eventTitle.sticky) {
       return;
     }
     const timer = setTimeout(() => setEventTitle(null), EVENT_TITLE_MS);
@@ -471,7 +476,22 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           }
           musicRef.current.stop();
           eventName.current = String(status.name || '');
-          setEventTitle({ name: eventName.current, at: Date.now() });
+          setEventTitle({
+            name: eventName.current,
+            at: Date.now(),
+            sticky: Boolean(status.sticky),
+          });
+        } else if (status.type === 'event_end') {
+          setEventTitle(null);
+        } else if (status.type === 'ceremony_end') {
+          // "Tina, let's end the award ceremony": Tina says goodbye full screen.
+          if (viewRef.current === 'video') {
+            endVideo();
+          }
+          musicRef.current.stop();
+          setHiddenTitle(null);
+          setView('tina');
+          setEventTitle({ name: 'Thank you!', at: Date.now(), sticky: true });
         } else if (status.type === 'slide') {
           if (status.title) {
             setEventTitle(null);

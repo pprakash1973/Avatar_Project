@@ -64,6 +64,8 @@ export type CeremonySettings = {
   pronunciations: Pronunciation[];
   /** When the settings were last saved (ms); the newer copy wins between devices. */
   saved_at?: number;
+  /** Set once the Ask AI event was added to these settings (so a removed one stays removed). */
+  ask_ai_offered?: boolean;
 };
 
 export type Song = { name: string; url: string };
@@ -88,6 +90,18 @@ export type CeremonyEvent = {
   trigger?: EventTrigger;
   languages?: LanguageCode[];
   translations?: Translations;
+  /** 'ask_ai': after its text, Tina answers the audience's questions on stage. */
+  kind?: 'say' | 'ask_ai';
+};
+
+/** Audience Q&A: after this, anyone on stage can ask Tina anything, without her name. */
+export const ASK_AI_EVENT: CeremonyEvent = {
+  name: 'Ask AI',
+  trigger: 'called',
+  kind: 'ask_ai',
+  script:
+    "It's time for Ask AI! Come up to the stage and ask me anything that comes to your mind. " +
+    "I'll do my best to answer, or at least make you smile.",
 };
 
 /** A placeholder left in an event's text, e.g. "[Leader Name, Designation]". */
@@ -246,7 +260,9 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
         'out of their busy schedules to join us. Your presence and continued support make this ' +
         'occasion truly special. Let us celebrate excellence and achievement together!',
     },
+    ASK_AI_EVENT,
   ],
+  ask_ai_offered: true,
   songs: [],
   keywords: [
     { phrase: 'please repeat', action: 'repeat' },
@@ -362,6 +378,13 @@ function migrate(saved: Record<string, unknown>): CeremonySettings {
       ...settings.keywords,
       ...TAMIL_KEYWORDS.filter((k) => !known.has(k.phrase)),
     ];
+  }
+  // Ask AI came later: offer it once.
+  if (!saved.ask_ai_offered) {
+    if (!settings.events.some((e) => e.kind === 'ask_ai')) {
+      settings.events = [...settings.events, ASK_AI_EVENT];
+    }
+    settings.ask_ai_offered = true;
   }
   return settings;
 }

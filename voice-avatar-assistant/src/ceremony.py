@@ -335,7 +335,23 @@ class CeremonyEvent:
     # the fly if empty).
     languages: list[str] = field(default_factory=lambda: ["en"])
     translations: dict[str, str] = field(default_factory=dict)
+    # "ask_ai": after its text, Tina takes questions from the audience on stage.
+    kind: Literal["say", "ask_ai"] = "say"
     done: bool = False
+
+
+# A turn this short during Ask AI is chatter ("okay", "thank you"), not a question.
+ASK_AI_MIN_WORDS = 3
+ASK_AI_RULES = """
+# Ask AI is on
+
+Members of the audience come to the stage and ask you anything that comes to mind; they don't say your name. They are not the host: never address anyone by name or call them the host.
+- Answer every question with warmth and light, good-natured humour, in one to three short sentences; a playful line is welcome, but keep it respectful and never at anyone's expense.
+- Use web_search for current facts.
+- If a question touches sensitive information, reply exactly: "Sorry, I cannot answer that." Sensitive: personal details about real people (salaries, phone numbers, addresses, health, relationships), confidential company, client or deal information, the award winners, passwords or security, and divisive topics (politics, religion, caste) or anything offensive.
+- If what you hear isn't meant for you (applause, chatter, someone talking to the audience), reply with one word at most, e.g. "Ha!"
+- When the host ends Ask AI ("Tina, end Ask AI", "thank you all, let's move on"), call end_ask_ai.
+"""
 
 
 def _legacy_events(raw: dict) -> list[CeremonyEvent]:
@@ -560,6 +576,7 @@ class CeremonyProgram:
                 else "called",
                 languages=_languages(e.get("languages")),
                 translations=_translations(e.get("translations")),
+                kind="ask_ai" if e.get("kind") == "ask_ai" else "say",
             )
             for e in raw.get("events", []) or []
             if isinstance(e, dict)
@@ -722,6 +739,11 @@ class CeremonyHost(Agent):
         self._last_suspense = ""
         # The slide on screen, so a winner on the same slide isn't hidden again.
         self._shown_slide = 0
+        # Ask AI: the audience asks questions on stage, without saying Tina's name.
+        self._ask_ai = False
+        # Tina reminds the host once of awards not yet announced before ending; the
+        # host's next "end the ceremony" is final.
+        self._end_reminded = False
         # Not named _instructions: the Agent base class stores its text under that name.
         pause = program.settings.listen_pause
         super().__init__(
@@ -921,6 +943,13 @@ class CeremonyHost(Agent):
                         {"type": "video_control", "action": control}
                     )
                 raise StopResponse()
+        if self._ask_ai:
+            # Anyone on stage may ask, without the name; a word or two is chatter.
+            if len(_phrase(text).split()) < ASK_AI_MIN_WORDS and not mentions_name(
+                text
+            ):
+                raise StopResponse()
+            return
         # In the hall Tina only reacts when called by name (plus a short follow-up window).
         if not self._wake.accepts(text):
             raise StopResponse()
@@ -1039,6 +1068,7 @@ class CeremonyHost(Agent):
                 - Use show_slide when the host asks to show a particular slide (the title slide is slide one), and hide_slides when they ask to hide the slide or show you instead.
                 - You can't see the screen; trust the host about it. If the host says the slide didn't come up properly (blank, black, dark, garbled, upside down, still blurred, frozen) or asks to show, reload or refresh the slide again, call reload_slide, then say a few words, e.g. "Sorry about that, here it is again." Never repeat the announcement for this.
                 - For "the next slide" or "the previous slide", call change_slide. If the host says the wrong award's slide is up, call show_award_slide with the right category.
+                - When the host says to end, close or wrap up the award ceremony, call end_ceremony. If it reports awards not yet announced, remind the host of them in one short sentence and ask whether to end anyway. If the host says to end again or confirms, call end_ceremony again: the host's decision is final, so never remind twice.
                 - Between awards, reply briefly and graciously if the host speaks to you, for example "Thank you!".
                 - If the host asks a general question (facts, news, sports scores, weather, a person or company), call web_search and answer in one or two short sentences. Never use web search to find award winners.
                 - When the host asks for one of the songs listed below by name ("Tina, play Jai Ho"), call play_song; it plays to the end. Then say at most two words, e.g. "Enjoy, everyone!" "Stop the music" calls stop_music.
@@ -1068,10 +1098,12 @@ class CeremonyHost(Agent):
                 or "- (none)"
             )
             + "\n"
+            + (ASK_AI_RULES if self._ask_ai else "")
         )
 
     def _host_rule(self) -> str:
-        if not self._host_name:
+        # During Ask AI the audience asks: their questions aren't the host's.
+        if not self._host_name or self._ask_ai:
             return ""
         return (
             f"- The host's name is {self._host_name}. Address them by name now and then, "
@@ -1173,6 +1205,8 @@ class CeremonyHost(Agent):
             pending = entries
 
         session = ctx.session
+        if self._ask_ai:
+            await self._end_ask_ai()
         intro = self._program.intro(category) if pending[0] is entries[0] else ""
         if intro:
             # What the award stands for, with Tina on screen; then the winners.
@@ -1221,13 +1255,17 @@ class CeremonyHost(Agent):
 
     async def _start_event(self, session: AgentSession, event: CeremonyEvent) -> None:
         logger.info("event: %s (slide %d)", event.name, event.slide)
+        # Ask AI runs until the host moves on to another event.
+        self._ask_ai = event.kind == "ask_ai"
         if event.slide:
             await self._send_slide(event.slide)
             self._shown_slide = event.slide
         else:
             await self._send_view("tina")
-        # The stage shows the event's name and ends any music or video.
-        await self._send_status({"type": "event", "name": event.name})
+        # The stage shows the event's name (through Ask AI) and ends any music or video.
+        await self._send_status(
+            {"type": "event", "name": event.name, "sticky": self._ask_ai}
+        )
         self.say_parts(session, await self.event_parts(event))
         event.done = True
         await self._refresh()
@@ -1280,6 +1318,21 @@ class CeremonyHost(Agent):
         await self._start_event(ctx.session, event)
         # The event's text is the whole reply.
         raise StopResponse()
+
+    async def _end_ask_ai(self) -> None:
+        logger.info("Ask AI ended")
+        self._ask_ai = False
+        await self._send_status({"type": "event_end"})
+        await self._refresh()
+
+    @function_tool()
+    async def end_ask_ai(self, ctx: RunContext) -> str:
+        """End Ask AI (the audience's questions on stage) when the host says so, e.g.
+        "Tina, end Ask AI" or "thank you all, let's move on"."""
+        if not self._ask_ai:
+            return "Ask AI isn't on."
+        await self._end_ask_ai()
+        return "Ask AI has ended. Thank the audience for their questions in one short, cheerful line."
 
     @function_tool()
     async def start_next_event(self, ctx: RunContext) -> str:
@@ -1473,6 +1526,31 @@ class CeremonyHost(Agent):
         """Hide the slide and show Tina large on the screen, e.g. "Tina, hide the slide"."""
         await self._send_view("tina")
         return "Tina is now shown full screen."
+
+    @function_tool()
+    async def end_ceremony(self, ctx: RunContext) -> str:
+        """End the award ceremony when the host says so, e.g. "Tina, let's end the
+        award ceremony". The first time, it reports awards not yet announced instead."""
+        pending = [
+            c
+            for c in self._program.categories()
+            if any(not a.announced for a in self._program.entries(c))
+        ]
+        if pending and not self._end_reminded:
+            self._end_reminded = True
+            logger.info("end_ceremony: reminded of %d awards", len(pending))
+            return (
+                f"Not ended yet. Awards not yet announced: {', '.join(pending)}. "
+                "Remind the host and ask whether to end anyway."
+            )
+        logger.info("end_ceremony")
+        self._ask_ai = False
+        await self._send_status({"type": "ceremony_end"})
+        await self._refresh()
+        return (
+            "The award ceremony has ended. Thank everyone graciously in one or two short "
+            "sentences."
+        )
 
     @function_tool()
     async def remaining_awards(self, ctx: RunContext) -> str:

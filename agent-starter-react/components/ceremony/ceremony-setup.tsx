@@ -571,6 +571,7 @@ export function CeremonySetup({
                         When Tina says it
                         <select
                           className={inputClassName}
+                          disabled={event.kind === 'ask_ai'}
                           value={event.trigger ?? 'called'}
                           onChange={(e) =>
                             setEvent(index, { trigger: e.target.value as EventTrigger })
@@ -609,6 +610,17 @@ export function CeremonySetup({
                           onChange={(e) => setEvent(index, { script: e.target.value })}
                         />
                       </label>
+                      {event.kind === 'ask_ai' && (
+                        <p className="rounded-md bg-sky-500/10 p-2 text-xs md:col-span-3">
+                          <strong>Audience Q&amp;A.</strong> After this text, anyone on stage can
+                          ask Tina anything, without saying her name. She answers with a touch of
+                          humour, doesn&rsquo;t use the host&rsquo;s name, and says &ldquo;Sorry, I
+                          cannot answer that&rdquo; to anything sensitive (people&rsquo;s personal
+                          details, confidential company or client matters, the winners, politics or
+                          religion). It ends when the host says &ldquo;Tina, end Ask AI&rdquo; or
+                          calls another event or award.
+                        </p>
+                      )}
                       {placeholder && (
                         <p role="alert" className="text-xs text-amber-600 md:col-span-3">
                           Fill in {placeholder} before the event: Tina would read it out as written.
