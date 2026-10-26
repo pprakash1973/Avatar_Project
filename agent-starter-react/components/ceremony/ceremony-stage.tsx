@@ -201,7 +201,7 @@ const CORNERS = ['right-3 bottom-3', 'right-3 top-3', 'left-3 top-12', 'left-3 b
 const SLIDE_HOLD_MS = 2 * 60 * 1000;
 // A hidden winner is revealed anyway after this long (if the reveal never arrives).
 const REVEAL_FAILSAFE_MS = 15_000;
-// The first award's curtains: how long they take to open (matches globals.css), and,
+// Each award's curtains: how long they take to open (matches globals.css), and,
 // without the suspense reveal, how long they stay closed on the slide.
 const CURTAIN_OPEN_MS = 2600;
 // After the reveal, the countdown music's final hit rings this long before fading.
@@ -212,7 +212,7 @@ const CURTAIN_CLOSED_MS = 1500;
 // An event's name stays over Tina this long (e.g. through the lamp lighting).
 const EVENT_TITLE_MS = 2 * 60 * 1000;
 
-/** Red stage curtains over the first award's slide; they part when `opening`. */
+/** Red stage curtains over an award's slide; they part when `opening`. */
 function Curtains({ opening }: { opening: boolean }) {
   return (
     <div
@@ -302,12 +302,15 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   const [hiddenTitle, setHiddenTitle] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<{ seconds: number; startedAt: number } | null>(null);
   const [revealedAt, setRevealedAt] = useState(0);
-  // The first award opens with stage curtains (once per ceremony); later awards use
-  // only the blur reveal.
+  // Each award's slide opens with stage curtains (further winners on it don't).
   const [curtain, setCurtain] = useState<'closed' | 'opening' | null>(null);
   // The event Tina is opening ("Lamp Lighting"), typed in above her.
   const [eventTitle, setEventTitle] = useState<{ name: string; at: number } | null>(null);
-  const curtainUsed = useRef(false);
+  // The slide the curtains last opened on: further winners on it (a team) don't get them.
+  const curtainSlide = useRef(0);
+  // The award title was just typed above Tina (its introduction): not typed again.
+  const [titleTyped, setTitleTyped] = useState(false);
+  const eventName = useRef('');
   // Corner for Tina's small window over slides; C moves it if it covers a face or text.
   const [corner, setCorner] = useState(0);
   // Tina's video shape (width / height): square for classic faces; Trinity-2 faces
@@ -467,16 +470,19 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
             endVideo();
           }
           musicRef.current.stop();
-          setEventTitle({ name: String(status.name || ''), at: Date.now() });
+          eventName.current = String(status.name || '');
+          setEventTitle({ name: eventName.current, at: Date.now() });
         } else if (status.type === 'slide') {
           if (status.title) {
             setEventTitle(null);
+            setTitleTyped(eventName.current === String(status.title));
+            eventName.current = '';
           }
           showSlide(Number(status.slide) || 1);
-          // Award slides carry their category; the first one opens with curtains, on
+          // Award slides carry their category; each new one opens with curtains, on
           // the winner's name (or shortly, without the suspense reveal).
-          if (status.title && !curtainUsed.current) {
-            curtainUsed.current = true;
+          if (status.title && Number(status.slide) !== curtainSlide.current) {
+            curtainSlide.current = Number(status.slide);
             setCurtain('closed');
             if (!status.hidden) {
               setTimeout(openCurtain, CURTAIN_CLOSED_MS);
@@ -673,10 +679,10 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         {hiddenTitle !== null && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 text-center">
             <p className="max-w-[80vw] text-[6vh] font-semibold text-white drop-shadow-lg">
-              {curtain ? (
+              {titleTyped ? (
+                // Already typed in above Tina with the award's introduction.
                 hiddenTitle
               ) : (
-                // Awards after the first (which has the curtains): the title types in.
                 <TypedTitle key={hiddenTitle} text={hiddenTitle} />
               )}
             </p>
