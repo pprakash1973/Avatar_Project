@@ -713,7 +713,9 @@ async def run_ceremony(
     except TimeoutError:
         logger.warning("no ceremony awards received")
         program = CeremonyProgram()
-    logger.info("ceremony with %d awards", len(program.awards))
+    logger.info(
+        "ceremony with %d awards, %d events", len(program.awards), len(program.events)
+    )
 
     async def send_slide(slide: int, hidden: bool = False, title: str = "") -> None:
         # hidden: blur the slide until the winner's name is revealed.
@@ -760,24 +762,22 @@ async def run_ceremony(
     )
     # Tina introduces herself as soon as she appears (non-interruptible, so the host
     # waits for it); she greets the host by name when they first call her ("Hello Tina").
-    settings = program.settings
-    host_name = record.get("name", "")
-    if settings.introduction:
-        introduction = await host.multilingual(
-            settings.introduction, settings.greeting_languages, {}, lambda text: text
-        )
+    introduction: list[tuple[str, str]] = []
+    for event in program.events_on("appear"):
+        introduction += await host.event_parts(event)
+    if introduction:
         # Give the stage a moment to show her video before she speaks.
         await asyncio.sleep(INTRODUCTION_DELAY_SECONDS)
         call_log.add("introduction")
         host.say_parts(session, introduction)
-    host.greet_on_first_call(
-        await host.multilingual(
-            settings.greeting,
-            settings.greeting_languages,
-            settings.greeting_translations,
-            lambda text: settings.greeting_for(host_name, text),
-        )
-    )
+    greeting: list[tuple[str, str]] = []
+    for event in program.events_on("first_call"):
+        greeting += await host.event_parts(event)
+    host.greet_on_first_call(greeting)
+    # The other events' translations, while Tina waits for the host.
+    task = asyncio.create_task(host.translate_events())
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
     await send_ui(
         ctx.room,
         UI_STATUS_TOPIC,

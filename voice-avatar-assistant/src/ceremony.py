@@ -15,7 +15,7 @@ import textwrap
 import time
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 import anthropic
 from livekit import rtc
@@ -312,6 +312,79 @@ class Award:
     script: str
     slide: int
     announced: bool = False
+    # Said once before the category's first winner, e.g. what the award recognises.
+    intro: str = ""
+
+
+EventTrigger = Literal["called", "appear", "first_call"]
+
+
+@dataclass
+class CeremonyEvent:
+    """Something Tina says word-for-word besides the awards: her introduction ("appear"),
+    the greeting ("first_call") or a programme item the host calls by name, in any order
+    ("called"), e.g. the welcome message or the lamp lighting."""
+
+    name: str
+    # English; {name} is the host's name.
+    script: str
+    # Slide shown while Tina speaks (0: Tina full screen).
+    slide: int = 0
+    trigger: EventTrigger = "called"
+    # Spoken in turn; the others than English use their translation (translated on
+    # the fly if empty).
+    languages: list[str] = field(default_factory=lambda: ["en"])
+    translations: dict[str, str] = field(default_factory=dict)
+    done: bool = False
+
+
+def _legacy_events(raw: dict) -> list[CeremonyEvent]:
+    """Pages from before events had their own introduction / greeting / welcome note."""
+    if not any(k in raw for k in ("introduction", "greeting", "welcome_note")):
+        return []
+    greeting_languages = _languages(raw.get("greeting_languages"))
+    events = [
+        CeremonyEvent(
+            "Introduction",
+            str(raw.get("introduction", DEFAULT_INTRODUCTION)).strip(),
+            trigger="appear",
+            languages=greeting_languages,
+        ),
+        CeremonyEvent(
+            "Greeting",
+            str(raw.get("greeting") or DEFAULT_GREETING).strip(),
+            trigger="first_call",
+            languages=greeting_languages,
+            translations=_translations(raw.get("greeting_translations")),
+        ),
+        CeremonyEvent(
+            "Welcome Message",
+            str(raw.get("welcome_note") or DEFAULT_WELCOME_NOTE).strip(),
+            languages=_languages(raw.get("welcome_languages")),
+            translations=_translations(raw.get("welcome_translations")),
+        ),
+    ]
+    return [e for e in events if e.script]
+
+
+def _event_key(text: str) -> str:
+    return " ".join(
+        w
+        for w in _phrase(text).split()
+        if w not in ("the", "event", "segment", "ceremony", "please")
+    )
+
+
+def _closest(wanted: str, names: dict[str, Any]) -> Any:
+    """The entry whose (normalized) name matches `wanted` (normalized the same way):
+    exactly, by containment if only one does, else the closest spelling."""
+    if wanted in names:
+        return names[wanted]
+    contains = [v for n, v in names.items() if wanted and (wanted in n or n in wanted)]
+    if len(contains) == 1:
+        return contains[0]
+    close = difflib.get_close_matches(wanted, list(names), n=1, cutoff=0.6)
+    return names[close[0]] if close else None
 
 
 @dataclass
@@ -321,16 +394,6 @@ class CeremonySettings:
     # Several winners in a category are announced one after another, each with its
     # slide, this many seconds apart.
     pause_seconds: float = DEFAULT_WINNER_PAUSE
-    # Said once when Tina appears (empty: she waits silently for the host).
-    introduction: str = DEFAULT_INTRODUCTION
-    greeting: str = DEFAULT_GREETING
-    welcome_note: str = DEFAULT_WELCOME_NOTE
-    # Languages the greeting / welcome note are spoken in, in order; English uses the
-    # text above, the others their translation (translated on the fly if empty).
-    greeting_languages: list[str] = field(default_factory=lambda: ["en"])
-    greeting_translations: dict[str, str] = field(default_factory=dict)
-    welcome_languages: list[str] = field(default_factory=lambda: ["en"])
-    welcome_translations: dict[str, str] = field(default_factory=dict)
     congratulate: bool = True
     # Languages Tina understands and replies in; she answers in the host's language.
     conversation_languages: list[str] = field(default_factory=lambda: ["en"])
@@ -351,11 +414,6 @@ class CeremonySettings:
     pronunciations: dict[str, str] = field(default_factory=dict)
     # Songs the host can ask for by name during a break: (name, link).
     songs: list[tuple[str, str]] = field(default_factory=list)
-
-    def greeting_for(self, host_name: str, text: str | None = None) -> str:
-        return (self.greeting if text is None else text).replace(
-            "{name}", host_name or "everyone"
-        )
 
     def announcement(self, award: "Award") -> str:
         """The approved script plus the congratulations, as Tina says it."""
@@ -431,6 +489,7 @@ def _norm(text: str) -> str:
 class CeremonyProgram:
     awards: list[Award] = field(default_factory=list)
     settings: CeremonySettings = field(default_factory=CeremonySettings)
+    events: list[CeremonyEvent] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, text: str) -> "CeremonyProgram":
@@ -442,13 +501,6 @@ class CeremonyProgram:
             pause_seconds=min(
                 max(float(raw.get("pause_seconds", DEFAULT_WINNER_PAUSE)), 1), 30
             ),
-            introduction=str(raw.get("introduction", DEFAULT_INTRODUCTION)).strip(),
-            greeting=str(raw.get("greeting") or DEFAULT_GREETING).strip(),
-            welcome_note=str(raw.get("welcome_note") or DEFAULT_WELCOME_NOTE).strip(),
-            greeting_languages=_languages(raw.get("greeting_languages")),
-            greeting_translations=_translations(raw.get("greeting_translations")),
-            welcome_languages=_languages(raw.get("welcome_languages")),
-            welcome_translations=_translations(raw.get("welcome_translations")),
             congratulate=raw.get("congratulate", True) is not False,
             conversation_languages=_languages(raw.get("conversation_languages")),
             style="lively" if raw.get("style") == "lively" else "professional",
@@ -492,12 +544,44 @@ class CeremonyProgram:
                 winner=str(item.get("winner", "")).strip(),
                 script=str(item["script"]).strip(),
                 slide=int(item.get("slide", 1)),
+                intro=str(item.get("intro") or "").strip(),
             )
             for item in items
             if str(item.get("category", "")).strip()
             and str(item.get("script", "")).strip()
         ]
-        return cls(awards=awards, settings=settings)
+        events = [
+            CeremonyEvent(
+                name=str(e["name"]).strip(),
+                script=str(e["script"]).strip(),
+                slide=max(0, int(e.get("slide") or 0)),
+                trigger=e["trigger"]
+                if e.get("trigger") in ("appear", "first_call")
+                else "called",
+                languages=_languages(e.get("languages")),
+                translations=_translations(e.get("translations")),
+            )
+            for e in raw.get("events", []) or []
+            if isinstance(e, dict)
+            and str(e.get("name", "")).strip()
+            and str(e.get("script", "")).strip()
+        ]
+        return cls(
+            awards=awards, settings=settings, events=_legacy_events(raw) + events
+        )
+
+    def events_on(self, trigger: EventTrigger) -> list[CeremonyEvent]:
+        return [e for e in self.events if e.trigger == trigger]
+
+    def match_event(self, spoken: str) -> CeremonyEvent | None:
+        """The event the host called by name, tolerating small differences."""
+        names: dict[str, CeremonyEvent] = {}
+        for e in self.events_on("called"):
+            names.setdefault(_event_key(e.name), e)
+        return _closest(_event_key(spoken), names)
+
+    def next_event(self) -> CeremonyEvent | None:
+        return next((e for e in self.events_on("called") if not e.done), None)
 
     def categories(self) -> list[str]:
         """Category names in presentation order, each once."""
@@ -509,6 +593,10 @@ class CeremonyProgram:
     def entries(self, category: str) -> list[Award]:
         key = _norm(category)
         return [a for a in self.awards if _norm(a.category) == key]
+
+    def intro(self, category: str) -> str:
+        """The category's introduction (set on any of its winners), or ""."""
+        return next((a.intro for a in self.entries(category) if a.intro), "")
 
     def match(self, spoken: str) -> str | None:
         """Matches what the host said to a category name, tolerating small differences."""
@@ -729,14 +817,14 @@ class CeremonyHost(Agent):
         return not self._resumed.is_set()
 
     def _new_request(self, text: str) -> bool:
-        """During a video: an award, a listed song or "play <something else>" is a new
-        request rather than a video control."""
+        """During a video: an award, an event, a listed song or "play <something else>"
+        is a new request rather than a video control."""
         said = _phrase(text)
         if re.search(r"award|விருது", said):
             return True
-        if any(
-            f" {_phrase(n)} " in f" {said} " for n, _ in self._program.settings.songs
-        ):
+        names = [n for n, _ in self._program.settings.songs]
+        names += [e.name for e in self._program.events_on("called")]
+        if any(f" {_phrase(n)} " in f" {said} " for n in names):
             return True
         return video_control(text) == "play" and bool(
             re.search(r"\bplay (?!(it|again|on|the video|video|please)\b)\w", said)
@@ -942,10 +1030,10 @@ class CeremonyHost(Agent):
                 # How to behave on stage
 
                 - Keep anything you say yourself very short: one sentence, plain text, no lists or formatting.
-                - When the host asks you to give the welcome note, welcome address or opening speech, call say_welcome_note. It speaks the approved text word-for-word.
                 - To announce a specific award, call announce_award with its category. When the host asks for "the next award" without naming it, call announce_next_award. These speak the approved announcement and show the slide. Never announce, guess or mention a winner's name yourself: you do not know the winners.
-                - When an announce tool succeeds it returns nothing; the announcement you then see in the conversation (ending with the congratulations to the winner) is the approved text and was spoken successfully. The same goes for the welcome note. Never apologise for it, comment on it or repeat it.
-                - Some categories have several winners: one announce call announces all of them, one after another, each with its slide.
+                - The programme also has events (listed below), such as the lamp lighting, a speech or a performance. The host calls them by name, in any order ("Tina, the lamp lighting please", "Tina, let's begin the fashion walk"): call start_event with the closest event name (e.g. "the welcome note" or "the welcome address" is the Welcome Message), which speaks the event's approved text word-for-word. For "the next event", call start_next_event. Events are not awards: never use announce_award for an event, or start_event for an award. If the host asks for an event that's already done, start it again.
+                - When an announce tool succeeds it returns nothing; the announcement you then see in the conversation (ending with the congratulations to the winner) is the approved text and was spoken successfully. The same goes for the events. Never apologise for it, comment on it or repeat it.
+                - Some categories have several winners: one announce call announces all of them, one after another, each with its slide. Some categories also have an introduction (what the award recognises), which the announce tools say first.
                 - If the host asks for a category that isn't in the list, say so briefly and mention the closest category names.
                 - If a category is fully announced and the host asks for it again, confirm first; if they confirm, call announce_award with repeat set to true.
                 - Use show_slide when the host asks to show a particular slide (the title slide is slide one), and hide_slides when they ask to hide the slide or show you instead.
@@ -966,6 +1054,14 @@ class CeremonyHost(Agent):
             .replace("{host}", self._host_rule())
             .replace("{languages}", self._language_rule())
             + categories
+            + "\n\n# Events the host can call by name, in any order\n"
+            + (
+                "\n".join(
+                    f"- {e.name}{' (done)' if e.done else ''}"
+                    for e in self._program.events_on("called")
+                )
+                or "- (none)"
+            )
             + "\n\n# Songs the host can ask for by name\n"
             + (
                 "\n".join(f"- {name}" for name, _ in self._program.settings.songs)
@@ -996,7 +1092,7 @@ class CeremonyHost(Agent):
             f"own script or in English letters, often mixed with English words. Reply in "
             f"the language of the host's latest request: {names} in its own script (never "
             f"in English letters), with names kept as written. The tools speak the approved "
-            f"announcements and welcome note as configured: never translate or redo them.\n"
+            f"announcements and events as configured: never translate or redo them.\n"
         )
 
     async def _refresh(self) -> None:
@@ -1077,13 +1173,37 @@ class CeremonyHost(Agent):
             pending = entries
 
         session = ctx.session
-        first = await self._speak(session, pending[0])
-        rest = pending[1:]
-        if rest:
-            self._run(self._continue_category(session, first, rest))
+        intro = self._program.intro(category) if pending[0] is entries[0] else ""
+        if intro:
+            # What the award stands for, with Tina on screen; then the winners.
+            logger.info("introducing %s", category)
+            await self._send_view("tina")
+            await self._send_status({"type": "event", "name": category})
+            handle = self.say_parts(
+                session, [("en", self._program.settings.spoken(intro))]
+            )
+            self._run(self._announce_after(session, handle, pending))
+        else:
+            first = await self._speak(session, pending[0])
+            if pending[1:]:
+                self._run(self._continue_category(session, first, pending[1:]))
         await self._refresh()
         # The announcement is the whole reply: don't let the model add anything.
         raise StopResponse()
+
+    async def _announce_after(
+        self, session: AgentSession, intro: SpeechHandle | None, pending: list[Award]
+    ) -> None:
+        """The category's winners, once its introduction has been said."""
+        if intro:
+            await intro.wait_for_playout()
+        # "please hold" during the introduction holds the announcement too.
+        await self._resumed.wait()
+        first = await self._speak(session, pending[0])
+        if pending[1:]:
+            await self._continue_category(session, first, pending[1:])
+        else:
+            await self._refresh()
 
     @function_tool()
     async def announce_award(self, ctx: RunContext, category: str, repeat: bool) -> str:
@@ -1099,20 +1219,76 @@ class CeremonyHost(Agent):
             return f"No category matches {category!r}. Categories are: {names}."
         return await self._announce(ctx, matched, repeat)
 
-    @function_tool()
-    async def say_welcome_note(self, ctx: RunContext) -> str:
-        """Give the approved welcome note to the audience, word-for-word."""
-        logger.info("welcome note")
-        await self._send_view("tina")
-        settings = self._program.settings
-        parts = await self.multilingual(
-            settings.welcome_note,
-            settings.welcome_languages,
-            settings.welcome_translations,
-            lambda text: text,
+    async def _start_event(self, session: AgentSession, event: CeremonyEvent) -> None:
+        logger.info("event: %s (slide %d)", event.name, event.slide)
+        if event.slide:
+            await self._send_slide(event.slide)
+            self._shown_slide = event.slide
+        else:
+            await self._send_view("tina")
+        # The stage shows the event's name and ends any music or video.
+        await self._send_status({"type": "event", "name": event.name})
+        self.say_parts(session, await self.event_parts(event))
+        event.done = True
+        await self._refresh()
+
+    async def event_parts(self, event: CeremonyEvent) -> list[tuple[str, str]]:
+        """(language, spoken text) for each of the event's languages."""
+        return await self.multilingual(
+            event.script,
+            event.languages,
+            event.translations,
+            lambda text: text.replace("{name}", self._host_name or "everyone"),
         )
-        self.say_parts(ctx.session, parts)
-        # The welcome note is the whole reply.
+
+    async def translate_events(self) -> None:
+        """Translates the events' empty translations up front, so a called event isn't
+        held up by translating it."""
+
+        async def one(event: CeremonyEvent, language: str) -> None:
+            try:
+                event.translations[language] = await translate(
+                    event.script, language, self._usage
+                )
+            except anthropic.APIError as e:
+                logger.warning("translation of %s failed: %s", event.name, e)
+
+        await asyncio.gather(
+            *(
+                one(e, language)
+                for e in self._program.events
+                for language in e.languages
+                if language != "en" and not e.translations.get(language)
+            )
+        )
+
+    @function_tool()
+    async def start_event(self, ctx: RunContext, name: str) -> str:
+        """Begin one of the programme's events (listed in the instructions) when the
+        host calls it by name, e.g. "Tina, the lamp lighting please": speaks its approved
+        text word-for-word. Events are not awards.
+
+        Args:
+            name: The event's name as the host said it, as close to the list as possible.
+        """
+        event = self._program.match_event(name)
+        if event is None:
+            names = ", ".join(e.name for e in self._program.events) or "none"
+            return (
+                f"No event matches {name!r}. The events are: {names}. Say so briefly."
+            )
+        await self._start_event(ctx.session, event)
+        # The event's text is the whole reply.
+        raise StopResponse()
+
+    @function_tool()
+    async def start_next_event(self, ctx: RunContext) -> str:
+        """Begin the next event that hasn't been done yet, in programme order, when the
+        host asks for "the next event" without naming it."""
+        event = self._program.next_event()
+        if event is None:
+            return "Every event has been done."
+        await self._start_event(ctx.session, event)
         raise StopResponse()
 
     @function_tool()

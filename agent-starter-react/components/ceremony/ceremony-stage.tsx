@@ -209,6 +209,8 @@ const COUNTDOWN_MUSIC_TAIL_MS = 2500;
 // How much "Tina, louder" / "softer" changes the music or video volume.
 const VOLUME_STEP = 0.2;
 const CURTAIN_CLOSED_MS = 1500;
+// An event's name stays over Tina this long (e.g. through the lamp lighting).
+const EVENT_TITLE_MS = 2 * 60 * 1000;
 
 /** Red stage curtains over the first award's slide; they part when `opening`. */
 function Curtains({ opening }: { opening: boolean }) {
@@ -303,6 +305,8 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   // The first award opens with stage curtains (once per ceremony); later awards use
   // only the blur reveal.
   const [curtain, setCurtain] = useState<'closed' | 'opening' | null>(null);
+  // The event Tina is opening ("Lamp Lighting"), typed in above her.
+  const [eventTitle, setEventTitle] = useState<{ name: string; at: number } | null>(null);
   const curtainUsed = useRef(false);
   // Corner for Tina's small window over slides; C moves it if it covers a face or text.
   const [corner, setCorner] = useState(0);
@@ -431,6 +435,14 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   }, [view, slideShownAt]);
 
   useEffect(() => {
+    if (!eventTitle) {
+      return;
+    }
+    const timer = setTimeout(() => setEventTitle(null), EVENT_TITLE_MS);
+    return () => clearTimeout(timer);
+  }, [eventTitle]);
+
+  useEffect(() => {
     if (!applauseAt) {
       return;
     }
@@ -449,7 +461,17 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           });
         } else if (status.type === 'ceremony_live') {
           setIsLive(true);
+        } else if (status.type === 'event') {
+          // A programme item, e.g. the lamp lighting: the music or video makes way.
+          if (viewRef.current === 'video') {
+            endVideo();
+          }
+          musicRef.current.stop();
+          setEventTitle({ name: String(status.name || ''), at: Date.now() });
         } else if (status.type === 'slide') {
+          if (status.title) {
+            setEventTitle(null);
+          }
           showSlide(Number(status.slide) || 1);
           // Award slides carry their category; the first one opens with curtains, on
           // the winner's name (or shortly, without the suspense reveal).
@@ -676,6 +698,11 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         />
       )}
 
+      {view === 'tina' && eventTitle?.name && (
+        <p className="absolute inset-x-0 top-[3vh] z-10 px-[5vw] text-center text-[5vh] leading-tight font-semibold drop-shadow-lg">
+          <TypedTitle key={eventTitle.at} text={eventTitle.name} />
+        </p>
+      )}
       {videoTrack && (
         <div
           style={{ aspectRatio: tinaRatio }}

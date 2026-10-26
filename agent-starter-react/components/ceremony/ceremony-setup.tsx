@@ -17,7 +17,10 @@ import { LANGUAGES, type LanguageCode, type VoiceCode } from '@/lib/agent-channe
 import {
   type Award,
   CONVERSATION_LANGUAGES,
+  type CeremonyEvent,
   type CeremonySettings,
+  EVENT_TRIGGERS,
+  type EventTrigger,
   type ExtractedAward,
   KEYWORD_ACTIONS,
   type KeywordAction,
@@ -33,6 +36,7 @@ import {
   loadWalkupMusic,
   parseAwardMusic,
   parseMusicUrl,
+  placeholderIn,
   saveAwards,
   saveDeck,
   saveOvationPhoto,
@@ -51,6 +55,8 @@ type SinkableAudio = HTMLAudioElement & { setSinkId?: (sinkId: string) => Promis
 const MIN_TEXT_CHARS = 40;
 // Keep the extraction request well under Vercel's 4.5 MB body limit.
 const MAX_REQUEST_BYTES = 3_500_000;
+
+const categoryKey = (category: string) => category.replace(/\s+/g, ' ').trim().toLowerCase();
 
 const inputClassName =
   'border-input bg-background text-foreground focus-visible:ring-ring w-full rounded-md border px-2 py-1 text-sm outline-none focus-visible:ring-2';
@@ -333,6 +339,10 @@ export function CeremonySetup({
     const key = (a: { category: string; winner: string }) =>
       `${a.category}|${a.winner}`.replace(/\s+/g, ' ').trim().toLowerCase();
     const music = new Map(awards.filter((a) => a.music).map((a) => [key(a), a.music]));
+    // And the introductions already written for the same categories.
+    const intros = new Map(
+      awards.filter((a) => a.intro).map((a) => [categoryKey(a.category), a.intro])
+    );
     update(
       found.map((a, i) => ({
         category: a.category,
@@ -340,8 +350,59 @@ export function CeremonySetup({
         script: defaultScript(a, found[i - 1]),
         slide: a.slide,
         music: music.get(key(a)),
+        intro:
+          found.findIndex((f) => categoryKey(f.category) === categoryKey(a.category)) === i
+            ? intros.get(categoryKey(a.category))
+            : undefined,
       }))
     );
+  };
+
+  const setEvent = (index: number, patch: Partial<CeremonyEvent>) =>
+    updateSettings({
+      events: settings.events.map((e, i) => (i === index ? { ...e, ...patch } : e)),
+    });
+
+  // Events read from the MC script (PDF or text), added after those already listed.
+  const [eventStatus, setEventStatus] = useState('');
+  const [eventError, setEventError] = useState('');
+  const importEvents = async (file: File) => {
+    setEventError('');
+    setEventStatus('Reading the script…');
+    try {
+      let text: string;
+      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+        const doc = await openPdf(await file.arrayBuffer());
+        const pages = [];
+        for (let n = 1; n <= doc.numPages; n++) {
+          pages.push(await pageText(doc, n));
+        }
+        text = pages.join('\n\n');
+      } else {
+        text = await file.text();
+      }
+      setEventStatus('Tina is finding the events…');
+      const response = await fetch('/api/ceremony/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const { events: found } = (await response.json()) as { events: CeremonyEvent[] };
+      const known = new Set(settings.events.map((e) => e.name.trim().toLowerCase()));
+      updateSettings({
+        events: [
+          ...settings.events,
+          ...found.filter((e) => e.name.trim() && !known.has(e.name.trim().toLowerCase())),
+        ],
+      });
+    } catch (e) {
+      setEventError(`Could not read the script: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setEventStatus('');
+    }
   };
 
   const setField = <K extends keyof Award>(index: number, key: K, value: Award[K]) =>
@@ -353,9 +414,10 @@ export function CeremonySetup({
     <div className="mx-auto w-full max-w-4xl px-4 pt-24 pb-16">
       <h1 className="text-foreground text-xl font-semibold">Award ceremony with Tina</h1>
       <p className="text-muted-foreground mt-1 text-sm">
-        Upload the deck as PDF, check each announcement, then start. During the ceremony the host
-        says, for example, &ldquo;Tina, please announce the Best Innovator award&rdquo;. Tina reads
-        the announcement text exactly as written below and shows its slide.
+        Upload the deck as PDF, add the events, check each announcement, then start. During the
+        ceremony the host says, for example, &ldquo;Tina, the lamp lighting please&rdquo; or
+        &ldquo;Tina, please announce the Best Innovator award&rdquo;. Tina reads the text exactly as
+        written below and shows its slide.
       </p>
 
       <section className="mt-6 rounded-xl border p-4">
@@ -412,7 +474,175 @@ export function CeremonySetup({
       </section>
 
       <section className="mt-4 rounded-xl border p-4">
-        <h2 className="text-sm font-semibold">2. Announcements ({awards.length})</h2>
+        <h2 className="text-sm font-semibold">2. Events ({settings.events.length})</h2>
+        <p className="text-muted-foreground mt-1 text-xs">
+          Everything Tina says besides the awards: her introduction, the greeting, the welcome
+          message and the programme items such as the lamp lighting or a performance. Tina says each
+          word-for-word, in English and any other ticked language, in turn. The host calls most of
+          them by name, in any order: &ldquo;Tina, the lamp lighting please&rdquo;. &ldquo;Tina, the
+          next event&rdquo; starts the next one not done yet, in this order.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label className="border-input hover:bg-accent cursor-pointer rounded-full border px-4 py-2 text-sm font-medium">
+            Import from the MC script (PDF or text)
+            <input
+              type="file"
+              accept="application/pdf,.pdf,text/plain,.txt,.md"
+              className="hidden"
+              disabled={eventStatus !== ''}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (file) {
+                  void importEvents(file);
+                }
+              }}
+            />
+          </label>
+          <span className="text-muted-foreground text-xs">
+            Tina lists each event with the MC&rsquo;s opening lines; check and edit them below. Word
+            files: save as PDF first.
+          </span>
+        </div>
+        {eventStatus && (
+          <p className="text-muted-foreground mt-2 flex items-center gap-2 text-sm">
+            <CircleNotchIcon weight="bold" className="size-4 animate-spin" /> {eventStatus}
+          </p>
+        )}
+        {eventError && (
+          <p role="alert" className="text-destructive mt-2 text-sm">
+            {eventError}
+          </p>
+        )}
+        <ol className="mt-3 flex flex-col gap-3">
+          {settings.events.map((event, index) => {
+            const placeholder = placeholderIn(event.script);
+            return (
+              <li key={index} className="flex gap-3 rounded-lg border p-3">
+                <div className="grid flex-1 gap-2 md:grid-cols-[1fr_15rem_6rem]">
+                  <label className="text-muted-foreground text-xs">
+                    Event name (what the host says)
+                    <input
+                      className={inputClassName}
+                      value={event.name}
+                      placeholder="e.g. Lamp Lighting"
+                      onChange={(e) => setEvent(index, { name: e.target.value })}
+                    />
+                  </label>
+                  <label className="text-muted-foreground text-xs">
+                    When Tina says it
+                    <select
+                      className={inputClassName}
+                      value={event.trigger ?? 'called'}
+                      onChange={(e) => setEvent(index, { trigger: e.target.value as EventTrigger })}
+                    >
+                      {EVENT_TRIGGERS.map((t) => (
+                        <option key={t.code} value={t.code}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-muted-foreground text-xs">
+                    Slide (optional)
+                    <input
+                      type="number"
+                      min={0}
+                      max={deck?.numPages}
+                      disabled={(event.trigger ?? 'called') !== 'called'}
+                      className={inputClassName}
+                      value={event.slide || ''}
+                      placeholder="Tina"
+                      onChange={(e) =>
+                        setEvent(index, { slide: Math.max(0, Number(e.target.value) || 0) })
+                      }
+                    />
+                  </label>
+                  <label className="text-muted-foreground text-xs md:col-span-3">
+                    What Tina says in English (word-for-word; {'{name}'} is the host&rsquo;s name)
+                    <textarea
+                      rows={3}
+                      className={inputClassName}
+                      value={event.script}
+                      placeholder="e.g. I request our chief guests and leaders to join us on stage for the lamp lighting ceremony."
+                      onChange={(e) => setEvent(index, { script: e.target.value })}
+                    />
+                  </label>
+                  {placeholder && (
+                    <p role="alert" className="text-xs text-amber-600 md:col-span-3">
+                      Fill in {placeholder} before the event: Tina would read it out as written.
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void hear(`event-${index}`, greetingFor(event.script, hostName))}
+                    disabled={!event.script || speaking !== null}
+                    className="text-muted-foreground hover:text-foreground flex items-center gap-1 justify-self-start text-xs"
+                  >
+                    {speaking === `event-${index}` ? (
+                      <CircleNotchIcon className="size-3.5 animate-spin" />
+                    ) : (
+                      <SpeakerHighIcon className="size-3.5" />
+                    )}
+                    Hear how Tina will say it
+                  </button>
+                  <div className="md:col-span-3">
+                    <SpeechLanguages
+                      id={`event-${index}`}
+                      source={event.script}
+                      languages={event.languages ?? ['en']}
+                      translations={event.translations ?? {}}
+                      onChange={(languages, translations) =>
+                        setEvent(index, { languages, translations })
+                      }
+                      preview={(text) => greetingFor(text, hostName)}
+                      hear={hear}
+                      speaking={speaking}
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  aria-label={`Remove ${event.name || 'event'}`}
+                  onClick={() =>
+                    updateSettings({ events: settings.events.filter((_, i) => i !== index) })
+                  }
+                  className="text-muted-foreground hover:text-destructive self-start"
+                >
+                  <TrashIcon className="size-5" />
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              updateSettings({ events: [...settings.events, { name: '', script: '' }] })
+            }
+          >
+            <PlusIcon /> Add event
+          </Button>
+          {settings.events.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (window.confirm('Remove all events?')) {
+                  updateSettings({ events: [] });
+                }
+              }}
+            >
+              Remove all
+            </Button>
+          )}
+        </div>
+      </section>
+
+      <section className="mt-4 rounded-xl border p-4">
+        <h2 className="text-sm font-semibold">3. Announcements ({awards.length})</h2>
         <p className="text-muted-foreground mt-1 text-xs">
           Tina reads the announcement text word-for-word. Spell names the way they should sound if
           needed. Winners stay on this laptop and are only sent to Tina when the ceremony starts.
@@ -474,6 +704,44 @@ export function CeremonySetup({
                   )}
                   Hear how Tina will say it
                 </button>
+                {awards.findIndex(
+                  (a) => categoryKey(a.category) === categoryKey(award.category)
+                ) === index && (
+                  <div className="md:col-span-3">
+                    <label className="text-muted-foreground text-xs">
+                      Introduction (optional): said once before this award&rsquo;s winners, with
+                      Tina on screen, e.g. what the award recognises
+                      <textarea
+                        rows={2}
+                        className={inputClassName}
+                        value={award.intro ?? ''}
+                        placeholder="e.g. We now present the Associate of the Year Award, which recognises outstanding contribution, commitment, and impact."
+                        onChange={(e) => setField(index, 'intro', e.target.value || undefined)}
+                      />
+                    </label>
+                    {award.intro && placeholderIn(award.intro) && (
+                      <p role="alert" className="text-xs text-amber-600">
+                        Fill in {placeholderIn(award.intro)} before the event: Tina would read it
+                        out as written.
+                      </p>
+                    )}
+                    {award.intro && (
+                      <button
+                        type="button"
+                        onClick={() => void hear(`intro-${index}`, award.intro ?? '')}
+                        disabled={speaking !== null}
+                        className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs"
+                      >
+                        {speaking === `intro-${index}` ? (
+                          <CircleNotchIcon className="size-3.5 animate-spin" />
+                        ) : (
+                          <SpeakerHighIcon className="size-3.5" />
+                        )}
+                        Hear the introduction
+                      </button>
+                    )}
+                  </div>
+                )}
                 <label className="text-muted-foreground text-xs md:col-span-3">
                   Announcement text (read word-for-word)
                   <textarea
@@ -519,7 +787,7 @@ export function CeremonySetup({
       </section>
 
       <section className="mt-4 rounded-xl border p-4">
-        <h2 className="text-sm font-semibold">3. Tina</h2>
+        <h2 className="text-sm font-semibold">4. Tina</h2>
         <div className="mt-3 flex flex-col gap-4">
           <VoiceSelect
             value={voice}
@@ -530,8 +798,7 @@ export function CeremonySetup({
             disabled={isStarting}
           />
           <label className="text-muted-foreground text-xs">
-            Host name (Tina introduces herself when she appears; when the host then says “Hello
-            Tina”, she greets them by name)
+            Host name (Tina greets the host by name: {'{name}'} in an event&rsquo;s text)
             <input
               className={inputClassName}
               value={hostName}
@@ -542,98 +809,6 @@ export function CeremonySetup({
               }}
             />
           </label>
-          <label className="text-muted-foreground text-xs">
-            Introduction (Tina says this as soon as she appears; the host waits for it. Leave empty
-            for no introduction)
-            <textarea
-              rows={2}
-              className={inputClassName}
-              value={settings.introduction}
-              onChange={(e) => updateSettings({ introduction: e.target.value })}
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => void hear('introduction', settings.introduction)}
-            disabled={!settings.introduction || speaking !== null}
-            className="text-muted-foreground hover:text-foreground -mt-2 flex items-center gap-1 self-start text-xs"
-          >
-            {speaking === 'introduction' ? (
-              <CircleNotchIcon className="size-3.5 animate-spin" />
-            ) : (
-              <SpeakerHighIcon className="size-3.5" />
-            )}
-            Hear the introduction
-          </button>
-          <label className="text-muted-foreground text-xs">
-            Greeting when the host first calls Tina ({'{name}'} is replaced by the host name)
-            <textarea
-              rows={2}
-              className={inputClassName}
-              value={settings.greeting}
-              onChange={(e) => updateSettings({ greeting: e.target.value })}
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => void hear('greeting', greetingFor(settings.greeting, hostName))}
-            disabled={!settings.greeting || speaking !== null}
-            className="text-muted-foreground hover:text-foreground -mt-2 flex items-center gap-1 self-start text-xs"
-          >
-            {speaking === 'greeting' ? (
-              <CircleNotchIcon className="size-3.5 animate-spin" />
-            ) : (
-              <SpeakerHighIcon className="size-3.5" />
-            )}
-            Hear the greeting
-          </button>
-          <SpeechLanguages
-            id="greeting"
-            source={settings.greeting}
-            languages={settings.greeting_languages}
-            translations={settings.greeting_translations}
-            onChange={(greeting_languages, greeting_translations) =>
-              updateSettings({ greeting_languages, greeting_translations })
-            }
-            preview={(text) => greetingFor(text, hostName)}
-            hear={hear}
-            speaking={speaking}
-          />
-          <label className="text-muted-foreground text-xs">
-            Welcome note (read word-for-word when the host says, e.g., &ldquo;Tina, please give the
-            welcome note&rdquo;)
-            <textarea
-              rows={4}
-              className={inputClassName}
-              value={settings.welcome_note}
-              onChange={(e) => updateSettings({ welcome_note: e.target.value })}
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => void hear('welcome', settings.welcome_note)}
-            disabled={!settings.welcome_note || speaking !== null}
-            className="text-muted-foreground hover:text-foreground -mt-2 flex items-center gap-1 self-start text-xs"
-          >
-            {speaking === 'welcome' ? (
-              <CircleNotchIcon className="size-3.5 animate-spin" />
-            ) : (
-              <SpeakerHighIcon className="size-3.5" />
-            )}
-            Hear the welcome note
-          </button>
-          <SpeechLanguages
-            id="welcome"
-            source={settings.welcome_note}
-            languages={settings.welcome_languages}
-            translations={settings.welcome_translations}
-            onChange={(welcome_languages, welcome_translations) =>
-              updateSettings({ welcome_languages, welcome_translations })
-            }
-            preview={(text) => text}
-            hear={hear}
-            speaking={speaking}
-          />
           <div className="flex flex-col gap-1">
             <label className="flex items-center gap-2 text-sm">
               <input
@@ -927,7 +1102,7 @@ export function CeremonySetup({
       </section>
 
       <section className="mt-4 rounded-xl border p-4">
-        <h2 className="text-sm font-semibold">4. Voice keywords</h2>
+        <h2 className="text-sm font-semibold">5. Voice keywords</h2>
         <p className="text-muted-foreground mt-1 text-xs">
           The host can say these phrases at any time, without calling &ldquo;Tina&rdquo;. While on
           hold, Tina ignores everything except a &ldquo;continue&rdquo; phrase.
@@ -982,9 +1157,9 @@ export function CeremonySetup({
       </section>
 
       <section className="mt-4 rounded-xl border p-4">
-        <h2 className="text-sm font-semibold">5. Name pronunciations</h2>
+        <h2 className="text-sm font-semibold">6. Name pronunciations</h2>
         <p className="text-muted-foreground mt-1 text-xs">
-          Wherever a name below appears in an announcement or the greeting, Tina says it the way you
+          Wherever a name below appears in an announcement or an event, Tina says it the way you
           write it on the right. Slides keep the real spelling. Use hyphens or simple sounds, e.g.
           Soumya → Sow-mya.
         </p>
@@ -1049,7 +1224,7 @@ export function CeremonySetup({
       </section>
 
       <section className="mt-4 rounded-xl border p-4">
-        <h2 className="text-sm font-semibold">6. Hall audio</h2>
+        <h2 className="text-sm font-semibold">7. Hall audio</h2>
         <p className="text-muted-foreground mt-1 mb-3 text-xs">
           Pick the host microphone and the speaker / PA output, and test them.
         </p>
@@ -1057,7 +1232,7 @@ export function CeremonySetup({
       </section>
 
       <section className="mt-4 rounded-xl border p-4">
-        <h2 className="text-sm font-semibold">7. Songs for breaks</h2>
+        <h2 className="text-sm font-semibold">8. Songs for breaks</h2>
         <p className="text-muted-foreground mt-1 mb-3 text-xs">
           Give each song a short name the host can say: &ldquo;Tina, play Jai Ho&rdquo; plays it to
           the end (YouTube songs in a small player in the corner); &ldquo;Tina, stop the

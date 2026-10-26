@@ -14,6 +14,9 @@ export type Award = {
   script: string;
   /** 1-based slide number shown while announcing. */
   slide: number;
+  /** Optional introduction to the category (what the award recognises), said once
+   * before its first winner with Tina on screen. Kept on the category's first entry. */
+  intro?: string;
   /** Optional music link (an audio file such as .mp3) played after this winner's
    * congratulations; otherwise the general walk-up music. */
   music?: string;
@@ -22,18 +25,6 @@ export type Award = {
 export type CeremonySettings = {
   /** Seconds between the winners of one category (all are announced together). */
   pause_seconds: number;
-  /** Said as soon as Tina appears, before the host speaks (empty: she waits silently). */
-  introduction: string;
-  /** Tina's reply when the host first calls her; {name} is the host's name. */
-  greeting: string;
-  /** Read word-for-word when the host asks for the welcome note. */
-  welcome_note: string;
-  /** Languages the introduction and greeting are spoken in, in order; English uses the text itself. */
-  greeting_languages: LanguageCode[];
-  /** The greeting in the other languages; an empty one is translated when Tina joins. */
-  greeting_translations: Translations;
-  welcome_languages: LanguageCode[];
-  welcome_translations: Translations;
   /** Languages Tina understands and replies in (English always); she answers in the host's. */
   conversation_languages: LanguageCode[];
   /** Say e.g. "Congratulations, Soumya!" after every winner's announcement. */
@@ -61,6 +52,10 @@ export type CeremonySettings = {
   /** General walk-up music link (an audio file); the uploaded file, else the built-in
    * clap-along beat, is used when this is empty. An announcement's own link comes first. */
   walkup_url: string;
+  /** Everything Tina says from this page besides the awards: her introduction, the
+   * greeting, the welcome message and the programme items (e.g. the lamp lighting),
+   * each said word-for-word when its trigger comes. */
+  events: CeremonyEvent[];
   /** Songs the host can ask for by name ("Tina, play Jai Ho"), e.g. during a break. */
   songs: Song[];
   /** Phrases the host can say (without "Tina") to control her. */
@@ -72,6 +67,31 @@ export type CeremonySettings = {
 };
 
 export type Song = { name: string; url: string };
+
+/** When Tina says an event: when the host calls it by name (default), as soon as she
+ * appears, or when the host first calls her ("Hello Tina"). */
+export type EventTrigger = 'called' | 'appear' | 'first_call';
+
+export const EVENT_TRIGGERS: { code: EventTrigger; label: string }[] = [
+  { code: 'called', label: 'Called by name' },
+  { code: 'appear', label: 'As soon as Tina appears' },
+  { code: 'first_call', label: 'Host’s first “Hello Tina”' },
+];
+
+/** name: what the host calls it ("Lamp Lighting"); script: what Tina says, in English
+ * ({name} is the host's name); slide: shown while she speaks (0 or none: Tina full
+ * screen); languages: spoken in turn (English only by default), with their translations. */
+export type CeremonyEvent = {
+  name: string;
+  script: string;
+  slide?: number;
+  trigger?: EventTrigger;
+  languages?: LanguageCode[];
+  translations?: Translations;
+};
+
+/** A placeholder left in an event's text, e.g. "[Leader Name, Designation]". */
+export const placeholderIn = (text: string) => text.match(/\[[^\]]+\]/)?.[0] ?? null;
 
 export type Translations = Partial<Record<LanguageCode, string>>;
 
@@ -193,17 +213,6 @@ const TAMIL_KEYWORDS: Keyword[] = [
 
 export const DEFAULT_SETTINGS: CeremonySettings = {
   pause_seconds: 3,
-  introduction: 'Hello, I am Tina, your AI avatar assistant. I am ready to support you.',
-  greeting: 'Hi {name}, good day! I am happy to be your co-host.',
-  welcome_note:
-    'Good evening, esteemed UST leaders and dear colleagues. A warm welcome to the PACS Annual ' +
-    'Rewards and Recognition Ceremony. We sincerely thank our leaders for taking time out of their ' +
-    'busy schedules to join us. Your presence and continued support make this occasion truly ' +
-    'special. Let us celebrate excellence and achievement together!',
-  greeting_languages: ['en'],
-  greeting_translations: {},
-  welcome_languages: ['en'],
-  welcome_translations: {},
   conversation_languages: ['en', 'ta'],
   congratulate: true,
   congratulations: 'Congratulations, {winner}!',
@@ -217,6 +226,27 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   walkup_seconds: 30,
   walkup_volume: 0.6,
   walkup_url: '',
+  events: [
+    {
+      name: 'Introduction',
+      trigger: 'appear',
+      script: 'Hello, I am Tina, your AI avatar assistant. I am ready to support you.',
+    },
+    {
+      name: 'Greeting',
+      trigger: 'first_call',
+      script: 'Hi {name}, good day! I am happy to be your co-host.',
+    },
+    {
+      name: 'Welcome Message',
+      trigger: 'called',
+      script:
+        'Good evening, esteemed UST leaders and dear colleagues. A warm welcome to the PACS ' +
+        'Annual Rewards and Recognition Ceremony. We sincerely thank our leaders for taking time ' +
+        'out of their busy schedules to join us. Your presence and continued support make this ' +
+        'occasion truly special. Let us celebrate excellence and achievement together!',
+    },
+  ],
   songs: [],
   keywords: [
     { phrase: 'please repeat', action: 'repeat' },
@@ -268,9 +298,50 @@ export const greetingFor = (greeting: string, hostName: string) =>
 /** Saved settings from earlier versions, brought up to date. */
 function migrate(saved: Record<string, unknown>): CeremonySettings {
   const settings = { ...DEFAULT_SETTINGS, ...saved } as CeremonySettings;
-  // Earlier versions saved a greeting without the host's name; use the new default.
-  if (settings.greeting === OLD_DEFAULT_GREETING) {
-    settings.greeting = DEFAULT_SETTINGS.greeting;
+  // The introduction, greeting and welcome note had their own fields; they are events now.
+  if ('introduction' in saved || 'greeting' in saved || 'welcome_note' in saved) {
+    const old = saved as Record<string, unknown>;
+    const text = (key: string, fallback: string) =>
+      typeof old[key] === 'string' ? (old[key] as string).trim() : fallback;
+    const [introduction, greeting, welcome] = DEFAULT_SETTINGS.events;
+    let greetingText = text('greeting', greeting.script) || greeting.script;
+    // Earlier versions saved a greeting without the host's name; use the new default.
+    if (greetingText === OLD_DEFAULT_GREETING) {
+      greetingText = greeting.script;
+    }
+    const greetingLanguages = (old.greeting_languages as LanguageCode[] | undefined) ?? ['en'];
+    const converted: CeremonyEvent[] = [
+      // An empty introduction meant none.
+      {
+        ...introduction,
+        script: text('introduction', introduction.script),
+        languages: greetingLanguages,
+      },
+      {
+        ...greeting,
+        script: greetingText,
+        languages: greetingLanguages,
+        translations: (old.greeting_translations as Translations | undefined) ?? {},
+      },
+      {
+        ...welcome,
+        script: text('welcome_note', welcome.script) || welcome.script,
+        languages: (old.welcome_languages as LanguageCode[] | undefined) ?? ['en'],
+        translations: (old.welcome_translations as Translations | undefined) ?? {},
+      },
+    ].filter((e) => e.script);
+    settings.events = [...converted, ...((saved.events as CeremonyEvent[] | undefined) ?? [])];
+    for (const key of [
+      'introduction',
+      'greeting',
+      'welcome_note',
+      'greeting_languages',
+      'greeting_translations',
+      'welcome_languages',
+      'welcome_translations',
+    ]) {
+      delete (settings as Record<string, unknown>)[key];
+    }
   }
   // Earlier versions asked before each extra winner, with a long pause; all winners are
   // now announced together, a few seconds apart.
