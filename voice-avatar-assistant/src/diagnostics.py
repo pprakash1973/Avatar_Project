@@ -29,6 +29,25 @@ def _reason(participant: rtc.RemoteParticipant) -> str:
     return models.DisconnectReason.Name(reason) if reason is not None else "UNKNOWN"
 
 
+class _ErrorLogHandler(logging.Handler):
+    """Errors LiveKit only logs, without a session "error" event: a rejected AI request
+    left Tina silent mid-ceremony while the record said "0 errors"."""
+
+    def __init__(self, call_log: "CallLog") -> None:
+        super().__init__(level=logging.ERROR)
+        self._call_log = call_log
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            error = record.getMessage()
+            if record.exc_info and record.exc_info[1] is not None:
+                error = f"{error}: {record.exc_info[1]}"
+            self._call_log.errors += 1
+            self._call_log.add("agent error", logger=record.name, error=error[:300])
+        except Exception:
+            self.handleError(record)
+
+
 class CallLog:
     def __init__(self, started_at: float) -> None:
         self._started_at = started_at
@@ -52,6 +71,9 @@ class CallLog:
             self.ended_by = why
 
     def watch(self, room: rtc.Room, session: AgentSession) -> None:
+        errors = _ErrorLogHandler(self)
+        logging.getLogger("livekit").addHandler(errors)
+
         @room.on("participant_connected")
         def _joined(participant: rtc.RemoteParticipant) -> None:
             self.add(f"{_kind(participant)} joined", identity=participant.identity)
@@ -124,6 +146,7 @@ class CallLog:
             if ev.error is not None:
                 info["error"] = str(ev.error)[:300]
             self.add("session closed", **info)
+            logging.getLogger("livekit").removeHandler(errors)
 
     def summary(self, shutdown_reason: str) -> dict[str, Any]:
         """Fields for the call record."""

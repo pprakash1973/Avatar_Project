@@ -733,7 +733,10 @@ async def run_ceremony(
 
     host = CeremonyHost(
         program=program,
-        llm_model=anthropic.LLM(model=MAIN_MODEL, parallel_tool_calls=False),
+        # Cached instructions, tools and history: replies stay quick through an hour.
+        llm_model=anthropic.LLM(
+            model=MAIN_MODEL, parallel_tool_calls=False, caching="ephemeral"
+        ),
         send_slide=send_slide,
         send_view=send_view,
         send_status=send_status,

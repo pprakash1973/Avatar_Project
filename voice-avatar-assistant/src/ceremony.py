@@ -340,8 +340,19 @@ class CeremonyEvent:
     done: bool = False
 
 
-# A turn this short during Ask AI is chatter ("okay", "thank you"), not a question.
-ASK_AI_MIN_WORDS = 3
+# During Ask AI a short turn made only of these is chatter ("okay thanks", "wow"),
+# not a question; any other turn, however short ("Who's Messi?"), is answered.
+ASK_AI_CHATTER = {
+    "ok", "okay", "thanks", "thank", "you", "yes", "yeah", "no", "wow", "nice",
+    "great", "cool", "super", "good", "hmm", "haha", "ha", "oh", "ah", "so", "and",
+    "right", "fine", "sure", "hi", "hello", "bye", "next", "go", "on", "come",
+    "நன்றி", "சரி", "ஓகே",
+}  # fmt: skip
+ASK_AI_CHATTER_MAX_WORDS = 3
+# A long ceremony's conversation is trimmed to its recent part once it grows this
+# long, so each reply stays fast (announcements and events are tracked separately).
+HISTORY_MAX_ITEMS = 60
+HISTORY_KEEP_ITEMS = 30
 ASK_AI_RULES = """
 # Ask AI is on
 
@@ -352,6 +363,31 @@ Members of the audience come to the stage and ask you anything that comes to min
 - If what you hear isn't meant for you (applause, chatter, someone talking to the audience), reply with one word at most, e.g. "Ha!"
 - When the host ends Ask AI ("Tina, end Ask AI", "thank you all, let's move on"), call end_ask_ai.
 """
+
+
+def _tool_calls_last(chat_ctx: llm.ChatContext) -> llm.ChatContext:
+    """The conversation with anything Tina said while a tool ran (a queued announcement,
+    a filler) moved before that tool's call. Left between the call and its result, it
+    made the request end with Tina's words, which the model rejects."""
+    items: list[llm.ChatItem] = []
+    running: set[str] = set()
+    for item in chat_ctx.items:
+        if item.type == "function_call":
+            running.add(item.call_id)
+        elif item.type == "function_call_output":
+            running.discard(item.call_id)
+        elif item.type == "message" and item.role == "assistant" and running:
+            first_call = next(
+                i
+                for i, x in enumerate(items)
+                if x.type == "function_call" and x.call_id in running
+            )
+            items.insert(first_call, item)
+            continue
+        items.append(item)
+    if items == chat_ctx.items:
+        return chat_ctx
+    return llm.ChatContext(items)
 
 
 def _legacy_events(raw: dict) -> list[CeremonyEvent]:
@@ -792,6 +828,17 @@ class CeremonyHost(Agent):
                         alternative.language = LanguageCode(language)
             yield event
 
+    async def llm_node(
+        self,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        model_settings: ModelSettings,
+    ) -> AsyncIterable[llm.ChatChunk | str]:
+        async for chunk in Agent.default.llm_node(
+            self, _tool_calls_last(chat_ctx), tools, model_settings
+        ):
+            yield chunk
+
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
@@ -887,9 +934,10 @@ class CeremonyHost(Agent):
             self._host_language = language
         settings = self._program.settings
         action = settings.keyword(text)
-        # Over music or a video, a keyword counts only when it's all that was said
-        # ("please hold"), not inside a lyric or a longer sentence.
-        if self._media and action and not settings.only_keyword(text):
+        # Over music or a video, or in an audience question during Ask AI, a keyword
+        # counts only when it's all that was said ("please hold"), not inside a lyric or
+        # a longer sentence ("Hold on, can I ask..." put Tina on hold mid Ask AI).
+        if (self._media or self._ask_ai) and action and not settings.only_keyword(text):
             action = None
         session = self.session
         if self.on_hold:
@@ -944,11 +992,13 @@ class CeremonyHost(Agent):
                     )
                 raise StopResponse()
         if self._ask_ai:
-            # Anyone on stage may ask, without the name; a word or two is chatter.
-            if len(_phrase(text).split()) < ASK_AI_MIN_WORDS and not mentions_name(
-                text
+            # Anyone on stage may ask, without the name; "okay thanks" is chatter.
+            words = [w for w in _phrase(text).split() if not mentions_name(w)]
+            if len(words) <= ASK_AI_CHATTER_MAX_WORDS and all(
+                w in ASK_AI_CHATTER for w in words
             ):
                 raise StopResponse()
+            await self._trim_history(turn_ctx)
             return
         # In the hall Tina only reacts when called by name (plus a short follow-up window).
         if not self._wake.accepts(text):
@@ -970,6 +1020,18 @@ class CeremonyHost(Agent):
             self._wake.open()
             self._pending_task = asyncio.create_task(self._answer_pending_later())
             raise StopResponse()
+        await self._trim_history(turn_ctx)
+
+    async def _trim_history(self, turn_ctx: llm.ChatContext) -> None:
+        """Keeps an hour-long ceremony's replies fast: once the conversation is long, only
+        its recent part is kept (for this reply too)."""
+        if len(turn_ctx.items) <= HISTORY_MAX_ITEMS:
+            return
+        logger.info("trimming the conversation from %d items", len(turn_ctx.items))
+        turn_ctx.truncate(max_items=HISTORY_KEEP_ITEMS)
+        await self.update_chat_ctx(
+            self.chat_ctx.copy().truncate(max_items=HISTORY_KEEP_ITEMS)
+        )
 
     async def _answer_pending_later(self) -> None:
         """Nothing followed the unfinished request: answer what was said."""
@@ -1257,6 +1319,9 @@ class CeremonyHost(Agent):
         logger.info("event: %s (slide %d)", event.name, event.slide)
         # Ask AI runs until the host moves on to another event.
         self._ask_ai = event.kind == "ask_ai"
+        # The stage stops any music or video for an event; don't wait for it to say so
+        # (a missed "stopped" left Tina requiring her name from the audience).
+        self._media.clear()
         if event.slide:
             await self._send_slide(event.slide)
             self._shown_slide = event.slide
@@ -1352,7 +1417,13 @@ class CeremonyHost(Agent):
             query: The question or topic to search for.
         """
         logger.info("web_search: %s", query)
-        async with ctx.with_filler(self._line(SEARCH_FILLER), delay=1.5):
+        # Spoken but kept out of the conversation: saved between the search's call and
+        # its result, it made the follow-up request end with Tina's words, which the
+        # model rejects ("Let me check that for you", then silence).
+        filler = self._line(SEARCH_FILLER)
+        async with ctx.with_filler(
+            lambda step: ctx.session.say(filler, add_to_chat_ctx=False), delay=1.5
+        ):
             try:
                 result = await run_web_search(
                     query, LANGUAGE_NAMES[self._host_language], self._usage

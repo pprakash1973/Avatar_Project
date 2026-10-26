@@ -104,6 +104,14 @@ export function useWalkupMusic(
     clearTimeout(stopTimerRef.current ?? undefined);
     stopTimerRef.current = null;
     if (!output.current && !youtube) {
+      if (playing) {
+        // Nothing to fade (e.g. a player that never started), but Tina must hear
+        // that the music stopped, or she keeps requiring her name.
+        current.current = null;
+        setSong(null);
+        setPlaying(false);
+        notify.current(false);
+      }
       return;
     }
     target.current = 0;
@@ -116,7 +124,7 @@ export function useWalkupMusic(
       setPlaying(false);
       notify.current(false);
     });
-  }, [fadeTo, youtube]);
+  }, [fadeTo, youtube, playing]);
 
   // Set by stop(); a song's end calls it through this ref.
   const stopRef = useRef(stop);
