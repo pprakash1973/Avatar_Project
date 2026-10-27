@@ -12,6 +12,7 @@ import {
 } from '@phosphor-icons/react/dist/ssr';
 import { MicrophoneSelect } from '@/components/app/microphone-select';
 import { VoiceSelect } from '@/components/app/voice-select';
+import { FloatingRemote, useFloatingRemote } from '@/components/ceremony/floating-remote';
 import { playRevealSound } from '@/components/ceremony/hologram-reveal';
 import { HostPanel } from '@/components/ceremony/host-panel';
 import { MusicCard } from '@/components/ceremony/music-card';
@@ -433,6 +434,8 @@ export function CeremonySetup({
   // The tab last open on this laptop (restored after the first render, which the server
   // also makes).
   const [tab, setTab] = useState<SetupTab>('events');
+  // The host's floating remote (a small always-on-top window), opened from the Host panel tab.
+  const remote = useFloatingRemote();
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(TAB_KEY);
@@ -1445,7 +1448,9 @@ export function CeremonySetup({
         </>
       )}
 
-      {tab === 'host' && <HostPanel settings={settings} awards={awards} />}
+      {tab === 'host' && (
+        <HostPanel settings={settings} awards={awards} onOpenRemote={() => void remote.open()} />
+      )}
 
       {tab === 'launch' && (
         <>
@@ -1542,6 +1547,9 @@ export function CeremonySetup({
           </section>
         </>
       )}
+      <FloatingRemote win={remote.win}>
+        <HostPanel settings={settings} awards={awards} compact />
+      </FloatingRemote>
     </div>
   );
 }

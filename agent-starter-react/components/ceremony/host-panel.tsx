@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ArrowSquareOutIcon,
   CheckCircleIcon,
   CircleNotchIcon,
   PauseIcon,
@@ -25,6 +26,8 @@ import {
 const STAGE_GONE_MS = 5000;
 // A click shows as "sent" until Tina's state changes, or this long.
 const CLICK_FEEDBACK_MS = 4000;
+// Exit the awards: the second tap must come within this long.
+const EXIT_CONFIRM_MS = 4000;
 
 const AGENT_LABELS: Record<string, string> = {
   listening: 'Listening',
@@ -41,14 +44,23 @@ const AGENT_LABELS: Record<string, string> = {
 export function HostPanel({
   settings,
   awards: awardList,
+  compact = false,
+  onOpenRemote,
 }: {
   settings: CeremonySettings;
   awards: Award[];
+  /** The floating remote: a narrow layout without the explanations. */
+  compact?: boolean;
+  /** Opens the floating remote (shown on the full panel when supported). */
+  onOpenRemote?: () => void;
 }) {
   const [state, setState] = useState<HostState | null>(null);
   const [lastSeen, setLastSeen] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [clicked, setClicked] = useState<{ key: string; at: number } | null>(null);
+  // Exit the awards takes a second tap within a few seconds (no dialog: the remote is
+  // a floating window, and a dialog would open on the settings page behind it).
+  const [exitArmedAt, setExitArmedAt] = useState(0);
   const channel = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
@@ -96,14 +108,24 @@ export function HostPanel({
     0
   );
   const nextAward = view.awards.find((a) => (view.awardsDone[a.category] ?? 0) < a.winners);
+  const exitArmed = now - exitArmedAt < EXIT_CONFIRM_MS;
 
   return (
-    <div className="mt-6 flex flex-col gap-4">
-      <p className="text-muted-foreground text-xs">
-        A click here makes Tina act at once, no need to call her. Keep this page on the laptop
-        screen; only the stage window goes on the TV (Windows: Win+P → Extend). Saving the settings
-        updates this list and Tina.
-      </p>
+    <div className={compact ? 'flex flex-col gap-2 p-2' : 'mt-6 flex flex-col gap-4'}>
+      {!compact && (
+        <div className="flex flex-wrap items-start gap-3">
+          <p className="text-muted-foreground flex-1 text-xs">
+            A click here makes Tina act at once, no need to call her. Keep this page on the laptop
+            screen; only the stage window goes on the TV (Windows: Win+P → Extend). Saving the
+            settings updates this list and Tina.
+          </p>
+          {onOpenRemote && (
+            <Button variant="outline" size="sm" onClick={onOpenRemote}>
+              <ArrowSquareOutIcon className="size-4" /> Open floating remote
+            </Button>
+          )}
+        </div>
+      )}
 
       <div
         role="status"
@@ -115,9 +137,11 @@ export function HostPanel({
           <>
             <WarningIcon className="size-5 text-amber-600" />
             <span className="flex-1">The stage isn&rsquo;t open yet.</span>
-            <Button size="sm" onClick={openStageWindow}>
-              Open the stage window
-            </Button>
+            {!compact && (
+              <Button size="sm" onClick={openStageWindow}>
+                Open the stage window
+              </Button>
+            )}
           </>
         ) : !state.live ? (
           <>
@@ -141,7 +165,7 @@ export function HostPanel({
         )}
       </div>
 
-      <section className="rounded-xl border p-4">
+      <section className={compact ? 'rounded-lg border p-2' : 'rounded-xl border p-4'}>
         <div className="flex items-baseline justify-between gap-2">
           <h2 className="text-sm font-semibold">Awards</h2>
           <span className="text-muted-foreground text-xs">
@@ -192,26 +216,29 @@ export function HostPanel({
             className="col-span-2"
             disabled={!ready}
             onClick={() => {
-              const left = winners - announced;
-              if (
-                window.confirm(
-                  left > 0
-                    ? `${left} winner${left === 1 ? ' is' : 's are'} not announced yet. End the awards anyway?`
-                    : 'End the awards? Tina thanks everyone and the screen shows "Thank you!".'
-                )
-              ) {
+              if (exitArmed) {
+                setExitArmedAt(0);
                 send('end_awards');
+              } else {
+                setExitArmedAt(Date.now());
               }
             }}
           >
-            <StopIcon weight="fill" className="size-5" /> Exit the awards
+            <StopIcon weight="fill" className="size-5" />
+            {exitArmed
+              ? winners - announced > 0
+                ? `Tap again to exit (${winners - announced} not announced)`
+                : 'Tap again to exit the awards'
+              : 'Exit the awards'}
           </Button>
         </div>
-        <p className="text-muted-foreground mt-2 text-xs">
-          Pause holds the next winner (Tina finishes the sentence she&rsquo;s saying); Resume
-          carries on.
-        </p>
-        {view.awards.length > 0 && (
+        {!compact && (
+          <p className="text-muted-foreground mt-2 text-xs">
+            Pause holds the next winner (Tina finishes the sentence she&rsquo;s saying); Resume
+            carries on.
+          </p>
+        )}
+        {!compact && view.awards.length > 0 && (
           <details className="mt-3">
             <summary className="text-muted-foreground cursor-pointer text-xs">
               All awards ({view.awards.length} categories)
@@ -250,7 +277,7 @@ export function HostPanel({
         )}
       </section>
 
-      <section className="rounded-xl border p-4">
+      <section className={compact ? 'rounded-lg border p-2' : 'rounded-xl border p-4'}>
         <h2 className="text-sm font-semibold">Events</h2>
         {view.events.length === 0 && (
           <p className="text-muted-foreground mt-2 text-xs">No events on the Events tab.</p>
@@ -301,7 +328,7 @@ export function HostPanel({
         </ul>
       </section>
 
-      <section className="rounded-xl border p-4">
+      <section className={compact ? 'rounded-lg border p-2' : 'rounded-xl border p-4'}>
         <div className="flex items-baseline justify-between gap-2">
           <h2 className="text-sm font-semibold">Music</h2>
           {view.music && (
