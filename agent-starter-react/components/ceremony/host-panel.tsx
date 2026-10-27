@@ -88,7 +88,8 @@ export function HostPanel({
     clicked?.key === `${action}:${name}` && now - clicked.at < CLICK_FEEDBACK_MS;
 
   const stageOpen = state !== null && now - lastSeen < STAGE_GONE_MS;
-  const ready = stageOpen && state.live;
+  // Clicks work as soon as the stage is connected to Tina.
+  const ready = stageOpen && (state.live || state.connection === 'connected');
   // What Tina has (from the stage), else the saved settings: the lists show before the
   // stage opens, and refresh when the settings are saved.
   const view = stageOpen

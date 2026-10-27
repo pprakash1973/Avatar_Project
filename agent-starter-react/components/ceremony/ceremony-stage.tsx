@@ -662,11 +662,15 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
     }
   }, [isConnected]);
 
+  // Tina is hosting: her "ceremony live" signal, or simply her listening or speaking (a
+  // brief reconnect cleared the signal once and left the host's remote disabled).
+  const tinaLive =
+    isConnected && (isLive || ['listening', 'thinking', 'speaking'].includes(agent.state));
   // The host's panel (another window on the laptop screen): its clicks go to Tina, and
   // it's kept up to date with what's happening.
   const hostState: HostState = {
     kind: 'state',
-    live: isLive && isConnected,
+    live: tinaLive,
     connection: connectionState,
     agentState: agent.state,
     now: view === 'tina' ? (eventTitle?.name ?? null) : hiddenTitle || null,
@@ -802,7 +806,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
     ? connectionState === 'disconnected'
       ? 'Disconnected'
       : 'Connecting…'
-    : !isLive
+    : !tinaLive
       ? 'Tina is getting ready…'
       : (STATE_LABELS[agent.state] ?? 'Tina is ready');
 

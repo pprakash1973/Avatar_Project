@@ -655,6 +655,45 @@ class CeremonyProgram:
     def next_event(self) -> CeremonyEvent | None:
         return next((e for e in self.events_on("called") if not e.done), None)
 
+    def names_an_item(self, text: str) -> bool:
+        """True if what was said names an event or award of the programme ("move on to
+        the lamp lighting"), or the next one: a request to Tina even without her name."""
+        said = _event_key(text)
+        if re.search(r"\bnext (event|award|category)\b", said):
+            return True
+
+        def parts(key: str) -> list[str]:
+            # "cultural classical solo": any two or more words in a row ("classical
+            # solo"); a one-word name ("dinner") whole.
+            words = key.split()
+            if len(words) == 1:
+                return words
+            return [
+                " ".join(words[i:j])
+                for i in range(len(words))
+                for j in range(i + 2, len(words) + 1)
+            ]
+
+        if any(
+            f" {part} " in f" {said} "
+            for e in self.events_on("called")
+            for part in parts(_event_key(e.name))
+        ):
+            return True
+        norm = _norm(text)
+        return any(
+            f" {part} " in f" {norm} "
+            for c in self.categories()
+            for part in parts(_norm(c))
+        )
+
+    def vocabulary(self, host_name: str = "") -> list[str]:
+        """Names for speech recognition to expect: Tina, the host, the events, awards."""
+        words = ["Tina", "டீனா", host_name.strip()]
+        words += [e.name for e in self.events_on("called")]
+        words += self.categories()
+        return [w for w in dict.fromkeys(w.strip() for w in words) if w][:100]
+
     def categories(self) -> list[str]:
         """Category names in presentation order, each once."""
         seen: dict[str, str] = {}
@@ -1031,8 +1070,11 @@ class CeremonyHost(Agent):
             await self._trim_history(turn_ctx)
             self._note("answering")
             return
-        # In the hall Tina only reacts when called by name (plus a short follow-up window).
-        if not self._wake.accepts(text):
+        # In the hall Tina only reacts when called by name (plus a short follow-up window),
+        # or when asked for an event or award by its name ("move on to the lamp lighting"):
+        # the host often skips her name there. Words to the audience naming one are left
+        # to her judgement (not_for_me).
+        if not self._wake.accepts(text) and not self._program.names_an_item(text):
             raise self._ignored("not called by name")
         if self._greeting:
             # The host's first call: Tina's first words are the greeting.
@@ -1492,7 +1534,15 @@ class CeremonyHost(Agent):
         self._event_count += 1
         if event.music and handle:
             self._run(self._music_after(handle, event, self._event_count))
+        if handle and not self._ask_ai:
+            self._run(self._listen_after(handle))
         await self._refresh()
+
+    async def _listen_after(self, handle: SpeechHandle) -> None:
+        """Once Tina has said an event's text, the host usually turns to her next ("can
+        we move on to..."): a few seconds when her name isn't needed."""
+        await handle.wait_for_playout()
+        self._wake.open()
 
     async def _music_after(
         self, handle: SpeechHandle, event: CeremonyEvent, count: int

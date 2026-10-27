@@ -778,6 +778,11 @@ async def run_ceremony(
         task.add_done_callback(tasks.discard)
 
     ctx.room.register_text_stream_handler(CEREMONY_EVENTS_TOPIC, on_event)
+    # Hearing: the events' and awards' names ("lamp lighting" was heard as "learning").
+    if isinstance(session.stt, inference.STT):
+        session.stt.update_options(
+            extra={"custom_vocabulary": program.vocabulary(record.get("name", ""))}
+        )
     await session.start(
         agent=host, room=ctx.room, room_options=room_options(ceremony=True)
     )
