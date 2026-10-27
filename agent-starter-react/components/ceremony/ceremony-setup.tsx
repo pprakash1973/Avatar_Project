@@ -13,6 +13,7 @@ import {
 import { MicrophoneSelect } from '@/components/app/microphone-select';
 import { VoiceSelect } from '@/components/app/voice-select';
 import { playRevealSound } from '@/components/ceremony/hologram-reveal';
+import { HostPanel } from '@/components/ceremony/host-panel';
 import { MusicCard } from '@/components/ceremony/music-card';
 import { Button } from '@/components/ui/button';
 import { LANGUAGES, type LanguageCode, type VoiceCode } from '@/lib/agent-channels';
@@ -48,6 +49,7 @@ import {
   saveWalkupMusic,
   spokenText,
 } from '@/lib/ceremony';
+import { announceSettingsSaved } from '@/lib/host-channel';
 import { type PDFDocumentProxy, openPdf, pageImage, pageText } from '@/lib/pdf';
 import { getSavedSpeakerId, saveName, saveVoice } from '@/lib/visitor';
 
@@ -67,12 +69,13 @@ const inputClassName =
 // For short number inputs inside a sentence.
 const numberClassName = inputClassName.replace('w-full', 'w-16');
 
-type SetupTab = 'events' | 'awards' | 'customise' | 'launch';
+type SetupTab = 'events' | 'awards' | 'customise' | 'launch' | 'host';
 const TABS: { code: SetupTab; label: string }[] = [
   { code: 'events', label: 'Events' },
   { code: 'awards', label: 'Awards' },
   { code: 'customise', label: 'Customise' },
   { code: 'launch', label: 'Sound test & launch' },
+  { code: 'host', label: 'Host panel' },
 ];
 const TAB_KEY = 'avatar.ceremony.setup-tab';
 
@@ -126,12 +129,16 @@ export function CeremonySetup({
       setSaveError(e instanceof Error ? e.message : String(e));
     }
     setIsDirty(false);
+    // The stage window (if open) reloads them and updates Tina; the host panel follows.
+    announceSettingsSaved();
   };
   const start = () => {
     if (isDirty) {
       void save();
     }
+    // The stage opens in its own window (for the TV); this page shows the host panel.
     onStart();
+    chooseTab('host');
   };
 
   useEffect(() => {
@@ -946,7 +953,7 @@ export function CeremonySetup({
                     onChange={(e) => updateSettings({ intro_reveal: e.target.checked })}
                   />
                   Magical entrance: Tina materializes as a hologram, with a shimmering sound, before
-                  her introduction (6 seconds)
+                  her introduction (10 seconds)
                 </label>
                 <button
                   type="button"
@@ -1438,6 +1445,8 @@ export function CeremonySetup({
         </>
       )}
 
+      {tab === 'host' && <HostPanel settings={settings} awards={awards} />}
+
       {tab === 'launch' && (
         <>
           <section className="mt-4 rounded-xl border p-4">
@@ -1476,6 +1485,13 @@ export function CeremonySetup({
 
           <section className="mt-4 rounded-xl border p-4">
             <h2 className="text-sm font-semibold">Ready to start?</h2>
+            <p className="text-muted-foreground mt-1 text-xs">
+              Start ceremony opens <strong>Tina&rsquo;s stage in its own window</strong>: set the TV
+              as an extended screen (Windows: Win+P → Extend), move that window to the TV, click
+              Start Tina there and press F. This page stays on the laptop and switches to the{' '}
+              <strong>Host panel</strong> tab: every event, the awards (start, pause, resume, exit)
+              and music at a click, where the audience can&rsquo;t see it.
+            </p>
             <ul className="mt-2 flex flex-col gap-1 text-sm">
               {[
                 { ok: settings.events.length > 0, text: `${settings.events.length} events` },

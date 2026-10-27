@@ -182,7 +182,7 @@ CEREMONY_FOLLOW_UP_SECONDS = 8.0
 INTRODUCTION_DELAY_SECONDS = 1.5
 # Ceremony: her magical entrance (a hologram materializing on the stage), before she
 # speaks; matches the stage animation and its sound's chime.
-INTRO_REVEAL_SECONDS = 6.0
+INTRO_REVEAL_SECONDS = 10.0
 
 
 AVATAR_KEYS = {"anam": "ANAM_API_KEY", "simli": "SIMLI_API_KEY"}
@@ -694,14 +694,22 @@ async def run_ceremony(
     program_future: asyncio.Future[CeremonyProgram] = loop.create_future()
     tasks: set[asyncio.Task] = set()
 
+    # Set once Tina is hosting: a later program (settings saved again) updates hers.
+    host_ref: list[CeremonyHost] = []
+
     async def read_awards(reader: rtc.TextStreamReader) -> None:
         try:
             program = CeremonyProgram.from_json(await reader.read_all())
         except (ValueError, KeyError, TypeError) as e:
             logger.warning("invalid ceremony awards: %s", e)
+            if program_future.done():
+                return
             program = CeremonyProgram()
         if not program_future.done():
             program_future.set_result(program)
+        elif host_ref:
+            # The settings were saved again during the ceremony.
+            await host_ref[0].update_program(program)
 
     def on_awards(reader: rtc.TextStreamReader, participant_identity: str) -> None:
         task = asyncio.create_task(read_awards(reader))
@@ -749,6 +757,7 @@ async def run_ceremony(
         host_name=record.get("name", ""),
         note=call_log.turn,
     )
+    host_ref.append(host)
 
     async def read_event(reader: rtc.TextStreamReader) -> None:
         try:
@@ -757,6 +766,11 @@ async def run_ceremony(
             return
         if event.get("type") == "media":
             host.media_playing(str(event.get("kind")), bool(event.get("playing")))
+        elif event.get("type") == "command":
+            # A click on the host's panel (forwarded by the stage).
+            await host.run_command(
+                str(event.get("action") or ""), str(event.get("name") or "")
+            )
 
     def on_event(reader: rtc.TextStreamReader, participant_identity: str) -> None:
         task = asyncio.create_task(read_event(reader))

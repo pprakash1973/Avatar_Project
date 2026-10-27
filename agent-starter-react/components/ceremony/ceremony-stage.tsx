@@ -32,8 +32,10 @@ import {
   CEREMONY_AWARDS_TOPIC,
   CEREMONY_EVENTS_TOPIC,
   type CeremonySettings,
+  SUSPENSE_TRACKS,
   loadOvationPhoto,
 } from '@/lib/ceremony';
+import { HOST_CHANNEL, type HostMessage, type HostState, hostLists } from '@/lib/host-channel';
 import { type PDFDocumentProxy, type PageRender, renderPage } from '@/lib/pdf';
 
 // A slide that fails to draw is tried again this many times, this far apart.
@@ -308,6 +310,12 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   const [revealedAt, setRevealedAt] = useState(0);
   // Each award's slide opens with stage curtains (further winners on it don't).
   const [curtain, setCurtain] = useState<'closed' | 'opening' | null>(null);
+  // What's done (from Tina), for the host's panel.
+  const [progress, setProgress] = useState<{
+    eventsDone: string[];
+    awardsDone: Record<string, number>;
+    askAi: boolean;
+  }>({ eventsDone: [], awardsDone: {}, askAi: false });
   // Tina's entrance: hidden behind a glowing orb until it starts, then she materializes
   // as a hologram for `ms`.
   const [entrance, setEntrance] = useState<{
@@ -494,8 +502,18 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           });
         } else if (status.type === 'ceremony_live') {
           setIsLive(true);
+        } else if (status.type === 'progress') {
+          // What's done, for the host's panel.
+          setProgress({
+            eventsDone: Array.isArray(status.events_done) ? status.events_done : [],
+            awardsDone:
+              status.awards_done && typeof status.awards_done === 'object'
+                ? status.awards_done
+                : {},
+            askAi: Boolean(status.ask_ai),
+          });
         } else if (status.type === 'intro_reveal') {
-          setEntrance({ phase: 'playing', ms: (Number(status.seconds) || 6) * 1000 });
+          setEntrance({ phase: 'playing', ms: (Number(status.seconds) || 10) * 1000 });
         } else if (status.type === 'event') {
           // A programme item, e.g. the lamp lighting: the music or video makes way.
           if (viewRef.current === 'video') {
@@ -643,6 +661,81 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
       setIsLive(false);
     }
   }, [isConnected]);
+
+  // The host's panel (another window on the laptop screen): its clicks go to Tina, and
+  // it's kept up to date with what's happening.
+  const hostState: HostState = {
+    kind: 'state',
+    live: isLive && isConnected,
+    connection: connectionState,
+    agentState: agent.state,
+    now: view === 'tina' ? (eventTitle?.name ?? null) : hiddenTitle || null,
+    music: music.playing ? (music.song ?? 'Walk-up music') : null,
+    onHold,
+    askAi: progress.askAi,
+    ...hostLists(settings, awards),
+    eventsDone: progress.eventsDone,
+    awardsDone: progress.awardsDone,
+  };
+  // Settings saved again during the ceremony (on the settings page): Tina gets them too.
+  const programKey = JSON.stringify({ awards, settings });
+  const sentProgram = useRef(programKey);
+  useEffect(() => {
+    if (!isLive || programKey === sentProgram.current) {
+      return;
+    }
+    sentProgram.current = programKey;
+    void room.localParticipant
+      .sendText(programKey, { topic: CEREMONY_AWARDS_TOPIC })
+      .catch((error) => console.error('could not send the new settings to Tina', error));
+  }, [isLive, programKey, room]);
+  const hostStateRef = useRef(hostState);
+  hostStateRef.current = hostState;
+  const hostChannel = useRef<BroadcastChannel | null>(null);
+  useEffect(() => {
+    const channel = new BroadcastChannel(HOST_CHANNEL);
+    hostChannel.current = channel;
+    channel.onmessage = (e: MessageEvent<HostMessage>) => {
+      if (e.data.kind === 'command') {
+        const { action, name } = e.data;
+        // Music is played here, straight away (Tina hears that it's playing).
+        if (action === 'song') {
+          const song = programRef.current.settings.songs.find((s) => s.name.trim() === name);
+          if (song) {
+            musicRef.current.playSong(song.url, song.name.trim());
+          }
+          return;
+        }
+        if (action === 'suspense') {
+          const track = SUSPENSE_TRACKS[Math.floor(Math.random() * SUSPENSE_TRACKS.length)];
+          musicRef.current.playSong(track, 'Suspense music');
+          return;
+        }
+        if (action === 'stop_music') {
+          musicRef.current.stop();
+          return;
+        }
+        void room.localParticipant
+          .sendText(JSON.stringify({ type: 'command', action, name: name ?? '' }), {
+            topic: CEREMONY_EVENTS_TOPIC,
+          })
+          .catch((error) => console.error('could not send the click to Tina', error));
+      } else if (e.data.kind === 'hello') {
+        channel.postMessage(hostStateRef.current);
+      }
+    };
+    // A heartbeat: the panel can tell the stage window is still open.
+    const heartbeat = setInterval(() => channel.postMessage(hostStateRef.current), 2000);
+    return () => {
+      clearInterval(heartbeat);
+      channel.close();
+      hostChannel.current = null;
+    };
+  }, [room]);
+  const hostStateKey = JSON.stringify(hostState);
+  useEffect(() => {
+    hostChannel.current?.postMessage(JSON.parse(hostStateKey));
+  }, [hostStateKey]);
 
   // Operator keyboard controls: ← → to change slides, Home for the first slide, F for full screen.
   useEffect(() => {

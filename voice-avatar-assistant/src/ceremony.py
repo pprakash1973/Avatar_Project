@@ -704,6 +704,13 @@ HOST_STYLES = {
         "the leaders."
     ),
 }
+# Tina's lines for clicks on the host panel (fixed: instant, nothing to go wrong).
+ALL_AWARDS_DONE = "Every award has been announced."
+ASK_AI_THANKS = "Thank you all for your wonderful questions!"
+AWARDS_END_LINE = (
+    "That brings us to the end of our awards. Congratulations once again to all our "
+    "winners, and thank you all for being part of this wonderful celebration!"
+)
 HOLD_REPLY = "Sure, I'll wait."
 RESUME_REPLY = "Thank you! Let's continue."
 NOTHING_TO_REPEAT = "There's nothing to repeat yet."
@@ -970,18 +977,12 @@ class CeremonyHost(Agent):
         session = self.session
         if self.on_hold:
             if action == "continue":
-                logger.info("resumed")
-                self._resumed.set()
-                await self._send_status({"type": "hold", "on": False})
-                session.say(self._line(RESUME_REPLY), allow_interruptions=False)
+                await self._resume(session, say=True)
                 self._wake.open()
                 raise StopResponse()
             raise self._ignored("on hold")
         if action == "hold":
-            logger.info("on hold")
-            self._resumed.clear()
-            await self._send_status({"type": "hold", "on": True})
-            session.say(self._line(HOLD_REPLY), allow_interruptions=False)
+            await self._hold(session, say=True)
             raise StopResponse()
         if action == "repeat":
             logger.info("repeat")
@@ -1228,6 +1229,113 @@ class CeremonyHost(Agent):
 
     async def _refresh(self) -> None:
         await self.update_instructions(self._build_instructions())
+        await self._send_progress()
+
+    async def _send_progress(self) -> None:
+        """What's done, for the host panel: events and awards, Ask AI, hold."""
+        await self._send_status(
+            {
+                "type": "progress",
+                "events_done": [e.name for e in self._program.events if e.done],
+                "awards_done": {
+                    c: sum(a.announced for a in self._program.entries(c))
+                    for c in self._program.categories()
+                },
+                "ask_ai": self._ask_ai,
+                "on_hold": self.on_hold,
+            }
+        )
+
+    async def _hold(self, session: AgentSession, *, say: bool) -> None:
+        """Wait (e.g. between the winners of a category) until resumed."""
+        logger.info("on hold")
+        self._resumed.clear()
+        await self._send_status({"type": "hold", "on": True})
+        if say:
+            session.say(self._line(HOLD_REPLY), allow_interruptions=False)
+        await self._send_progress()
+
+    async def _resume(self, session: AgentSession, *, say: bool) -> None:
+        logger.info("resumed")
+        self._resumed.set()
+        await self._send_status({"type": "hold", "on": False})
+        if say:
+            session.say(self._line(RESUME_REPLY), allow_interruptions=False)
+        await self._send_progress()
+
+    async def update_program(self, program: CeremonyProgram) -> None:
+        """The host saved the settings again during the ceremony: the new events,
+        awards and settings, keeping what's already done."""
+        done = {_event_key(e.name) for e in self._program.events if e.done}
+        for event in program.events:
+            event.done = _event_key(event.name) in done
+        announced = {
+            (_norm(a.category), a.winner.lower())
+            for a in self._program.awards
+            if a.announced
+        }
+        for award in program.awards:
+            award.announced = (_norm(award.category), award.winner.lower()) in announced
+        self._program.events = program.events
+        self._program.awards = program.awards
+        self._program.settings = program.settings
+        logger.info(
+            "program updated: %d events, %d awards",
+            len(program.events),
+            len(program.awards),
+        )
+        self._note("settings updated")
+        await self._refresh()
+
+    async def run_command(self, action: str, name: str = "") -> None:
+        """A click on the host's panel: done straight away, without hearing or the
+        model, so the host never has to call Tina twice."""
+        session = self.session
+        logger.info("host clicked %s %s", action, name)
+        self._note("host clicked", action=action, name=name)
+        if action == "pause":
+            if not self.on_hold:
+                await self._hold(session, say=False)
+            return
+        if action == "resume":
+            if self.on_hold:
+                await self._resume(session, say=False)
+            return
+        if action == "stop_music":
+            await self._send_status({"type": "music_stop"})
+            return
+        if self.on_hold:
+            # Starting something is the host's clear wish to carry on.
+            await self._resume(session, say=False)
+        # A reply Tina is giving makes way; an announcement in progress is finished.
+        current = session.current_speech
+        if current is not None and current.allow_interruptions:
+            current.interrupt()
+        if action == "event":
+            event = next(
+                (e for e in self._program.events_on("called") if e.name == name),
+                None,
+            ) or self._program.match_event(name)
+            if event is not None:
+                await self._start_event(session, event)
+        elif action == "next_award":
+            category = self._program.next_category()
+            if category is None:
+                session.say(ALL_AWARDS_DONE, allow_interruptions=False)
+            else:
+                await self._announce_category(session, category, repeat=False)
+        elif action == "award":
+            category = self._program.match(name)
+            if category is not None:
+                # A click on an announced category is a deliberate repeat.
+                await self._announce_category(session, category, repeat=True)
+        elif action == "end_ask_ai":
+            if self._ask_ai:
+                await self._end_ask_ai()
+                session.say(ASK_AI_THANKS, allow_interruptions=False)
+        elif action == "end_awards":
+            await self._end_awards()
+            session.say(AWARDS_END_LINE, allow_interruptions=False)
 
     async def _speak(self, session: AgentSession, award: Award) -> SpeechHandle:
         logger.info(
@@ -1294,6 +1402,17 @@ class CeremonyHost(Agent):
         await self._refresh()
 
     async def _announce(self, ctx: RunContext, category: str, repeat: bool) -> str:
+        problem = await self._announce_category(ctx.session, category, repeat)
+        if problem:
+            return problem
+        # The announcement is the whole reply: don't let the model add anything.
+        raise StopResponse()
+
+    async def _announce_category(
+        self, session: AgentSession, category: str, repeat: bool
+    ) -> str | None:
+        """Announces a category's winners (its introduction first); a reason instead
+        when it was already announced and isn't to be repeated."""
         entries = self._program.entries(category)
         pending = [a for a in entries if not a.announced]
         if not pending:
@@ -1303,7 +1422,6 @@ class CeremonyHost(Agent):
                 a.announced = False
             pending = entries
 
-        session = ctx.session
         # An event's music still waiting for its text doesn't start over an award.
         self._event_count += 1
         if self._ask_ai:
@@ -1323,8 +1441,7 @@ class CeremonyHost(Agent):
             if pending[1:]:
                 self._run(self._continue_category(session, first, pending[1:]))
         await self._refresh()
-        # The announcement is the whole reply: don't let the model add anything.
-        raise StopResponse()
+        return None
 
     async def _announce_after(
         self, session: AgentSession, intro: SpeechHandle | None, pending: list[Award]
@@ -1668,6 +1785,13 @@ class CeremonyHost(Agent):
         self._note("ignored", reason="not for Tina (her judgement)")
         raise StopResponse()
 
+    async def _end_awards(self) -> None:
+        """The award ceremony is over: Tina full screen with "Thank you!"."""
+        self._ask_ai = False
+        self._event_count += 1
+        await self._send_status({"type": "ceremony_end"})
+        await self._refresh()
+
     @function_tool()
     async def end_ceremony(self, ctx: RunContext) -> str:
         """End the award ceremony when the host says so, e.g. "Tina, let's end the
@@ -1685,9 +1809,7 @@ class CeremonyHost(Agent):
                 "Remind the host and ask whether to end anyway."
             )
         logger.info("end_ceremony")
-        self._ask_ai = False
-        await self._send_status({"type": "ceremony_end"})
-        await self._refresh()
+        await self._end_awards()
         return (
             "The award ceremony has ended. Thank everyone graciously in one or two short "
             "sentences."
