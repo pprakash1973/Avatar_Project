@@ -43,6 +43,9 @@ export type CeremonySettings = {
   suspense_seconds: number;
   /** Suspense music during that countdown, its final hit landing on the name. */
   suspense_music: boolean;
+  /** Tina's entrance: she materializes as a hologram, with a shimmering sound, before
+   * her introduction. */
+  intro_reveal: boolean;
   /** Play walk-up music after each winner (the built-in clap-along beat by default). */
   walkup: boolean;
   /** How long the music plays after the last winner of a category, in seconds. */
@@ -243,6 +246,7 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   suspense: true,
   suspense_seconds: 5,
   suspense_music: true,
+  intro_reveal: true,
   walkup: true,
   walkup_seconds: 30,
   walkup_volume: 0.6,

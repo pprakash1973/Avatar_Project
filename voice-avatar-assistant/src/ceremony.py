@@ -468,6 +468,8 @@ class CeremonySettings:
     # "And the winner is...": a pause before the name while the slide is hidden.
     suspense: bool = True
     suspense_seconds: float = DEFAULT_SUSPENSE_SECONDS
+    # Tina's entrance: she materializes as a hologram on the stage before she speaks.
+    intro_reveal: bool = True
     congratulations: str = DEFAULT_CONGRATULATIONS
     # Phrases the host can say without "Tina", e.g. "please hold".
     keywords: list[tuple[str, KeywordAction]] = field(
@@ -571,6 +573,7 @@ class CeremonyProgram:
                 max(float(raw.get("listen_pause") or DEFAULT_LISTEN_PAUSE), 0.5), 4.0
             ),
             suspense=raw.get("suspense", True) is not False,
+            intro_reveal=raw.get("intro_reveal", True) is not False,
             suspense_seconds=min(
                 max(
                     float(raw.get("suspense_seconds") or DEFAULT_SUSPENSE_SECONDS), 1.0

@@ -333,7 +333,117 @@
   }
 }
 
+/* Tina's entrance: her picture materializes as a hologram in the beam of light (the
+   particles are drawn by HologramReveal), over --reveal-ms. */
+@keyframes hologram-materialize {
+  0%,
+  42% {
+    opacity: 0;
+    clip-path: inset(50% 0 50% 0);
+    filter: sepia(1) hue-rotate(160deg) saturate(2.5) brightness(1.5) blur(10px);
+  }
+  50% {
+    opacity: 0.55;
+    clip-path: inset(30% 0 30% 0);
+    filter: sepia(1) hue-rotate(160deg) saturate(2.5) brightness(1.35) blur(5px);
+  }
+  54% {
+    opacity: 0.2;
+  }
+  58% {
+    opacity: 0.8;
+    clip-path: inset(10% 0 10% 0);
+  }
+  61% {
+    opacity: 0.45;
+  }
+  66% {
+    opacity: 0.9;
+    clip-path: inset(0 0 0 0);
+    filter: sepia(0.9) hue-rotate(160deg) saturate(3) brightness(1.4) blur(2px);
+  }
+  80% {
+    opacity: 1;
+    filter: sepia(0.5) hue-rotate(160deg) saturate(1.8) brightness(1.2) blur(0);
+  }
+  100% {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    filter: sepia(0) hue-rotate(0deg) saturate(1) brightness(1) blur(0);
+  }
+}
+.hologram-materialize {
+  animation: hologram-materialize var(--reveal-ms, 6000ms) linear both;
+}
+@keyframes hologram-scanlines {
+  0%,
+  42% {
+    opacity: 0;
+    background-position: 0 0;
+  }
+  50% {
+    opacity: 0.9;
+  }
+  80% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 0;
+    background-position: 0 120px;
+  }
+}
+.hologram-scanlines {
+  background: repeating-linear-gradient(0deg, rgb(103 232 249 / 0.22) 0 2px, transparent 2px 6px);
+  mix-blend-mode: screen;
+  animation: hologram-scanlines var(--reveal-ms, 6000ms) linear both;
+}
+@keyframes orb-pulse {
+  from {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+.orb-pulse {
+  animation: orb-pulse 2.4s ease-in-out infinite alternate;
+}
+@keyframes reveal-name {
+  0%,
+  72% {
+    opacity: 0;
+    letter-spacing: 1.2em;
+    text-shadow: none;
+  }
+  85% {
+    opacity: 1;
+    letter-spacing: 0.5em;
+    text-shadow:
+      0 0 18px rgb(103 232 249 / 0.9),
+      0 0 40px rgb(167 139 250 / 0.7);
+  }
+  100% {
+    opacity: 0;
+    letter-spacing: 0.5em;
+  }
+}
+.reveal-name {
+  animation: reveal-name 6s ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .hologram-materialize {
+    animation: curtains-fade 1s ease-out reverse both;
+  }
+  .hologram-scanlines,
+  .reveal-name {
+    display: none;
+  }
+  .orb-pulse {
+    animation: none;
+  }
   .stage-light,
   .speaking-glow,
   .ovation-photo,

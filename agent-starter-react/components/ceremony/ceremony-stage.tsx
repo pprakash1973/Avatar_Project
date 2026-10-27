@@ -16,6 +16,7 @@ import {
   StopIcon,
 } from '@phosphor-icons/react/dist/ssr';
 import { APPLAUSE_MS, ApplauseCrowd } from '@/components/ceremony/applause-crowd';
+import { HologramReveal, PreRevealOrb } from '@/components/ceremony/hologram-reveal';
 import { MusicCard } from '@/components/ceremony/music-card';
 import {
   type StageVideo,
@@ -209,6 +210,9 @@ const COUNTDOWN_MUSIC_TAIL_MS = 2500;
 // How much "Tina, louder" / "softer" changes the music or video volume.
 const VOLUME_STEP = 0.2;
 const CURTAIN_CLOSED_MS = 1500;
+// Without the entrance's start from Tina (an older agent), she appears anyway this long
+// after her video arrives.
+const REVEAL_FAILSAFE_AFTER_VIDEO_MS = 20_000;
 // An event's name stays over Tina this long (e.g. through the lamp lighting).
 const EVENT_TITLE_MS = 2 * 60 * 1000;
 
@@ -304,6 +308,12 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   const [revealedAt, setRevealedAt] = useState(0);
   // Each award's slide opens with stage curtains (further winners on it don't).
   const [curtain, setCurtain] = useState<'closed' | 'opening' | null>(null);
+  // Tina's entrance: hidden behind a glowing orb until it starts, then she materializes
+  // as a hologram for `ms`.
+  const [entrance, setEntrance] = useState<{
+    phase: 'waiting' | 'playing' | 'done';
+    ms: number;
+  }>(() => ({ phase: settings.intro_reveal ? 'waiting' : 'done', ms: 0 }));
   // The event Tina is opening ("Lamp Lighting"), typed in above her.
   // sticky: kept up until the event ends (Ask AI), not just for EVENT_TITLE_MS.
   const [eventTitle, setEventTitle] = useState<{
@@ -442,6 +452,21 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
     return () => clearTimeout(timer);
   }, [view, slideShownAt]);
 
+  // The entrance ends after its length; without a start from Tina, she appears anyway.
+  useEffect(() => {
+    if (entrance.phase === 'playing') {
+      const timer = setTimeout(() => setEntrance({ phase: 'done', ms: 0 }), entrance.ms);
+      return () => clearTimeout(timer);
+    }
+    if (entrance.phase === 'waiting' && videoTrack) {
+      const timer = setTimeout(
+        () => setEntrance({ phase: 'done', ms: 0 }),
+        REVEAL_FAILSAFE_AFTER_VIDEO_MS
+      );
+      return () => clearTimeout(timer);
+    }
+  }, [entrance, videoTrack]);
+
   useEffect(() => {
     if (!eventTitle || eventTitle.sticky) {
       return;
@@ -469,6 +494,8 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           });
         } else if (status.type === 'ceremony_live') {
           setIsLive(true);
+        } else if (status.type === 'intro_reveal') {
+          setEntrance({ phase: 'playing', ms: (Number(status.seconds) || 6) * 1000 });
         } else if (status.type === 'event') {
           // A programme item, e.g. the lamp lighting: the music or video makes way.
           if (viewRef.current === 'video') {
@@ -689,8 +716,13 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   return (
     <div className="fixed inset-0 z-40 overflow-hidden bg-black">
       {!tinaInCorner && (
-        // Slow, soft stage lights behind Tina.
-        <div aria-hidden className="pointer-events-none absolute inset-0 opacity-60">
+        // Slow, soft stage lights behind Tina (dimmed until her entrance).
+        <div
+          aria-hidden
+          className={`pointer-events-none absolute inset-0 transition-opacity duration-[2000ms] ${
+            entrance.phase === 'waiting' ? 'opacity-15' : 'opacity-60'
+          }`}
+        >
           <div className="stage-light absolute -top-1/4 -left-1/4 size-[70vmax] rounded-full bg-[radial-gradient(circle,rgb(168_85_247/0.35),transparent_60%)]" />
           <div
             className="stage-light absolute -right-1/4 -bottom-1/4 size-[70vmax] rounded-full bg-[radial-gradient(circle,rgb(59_130_246/0.3),transparent_60%)]"
@@ -739,10 +771,22 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           <TypedTitle key={eventTitle.at} text={eventTitle.name} />
         </p>
       )}
+      {entrance.phase === 'waiting' && <PreRevealOrb />}
       {videoTrack && (
         <div
-          style={{ aspectRatio: tinaRatio }}
+          style={
+            {
+              aspectRatio: tinaRatio,
+              '--reveal-ms': `${entrance.ms}ms`,
+            } as React.CSSProperties
+          }
           className={`${
+            entrance.phase === 'waiting'
+              ? 'opacity-0'
+              : entrance.phase === 'playing'
+                ? 'hologram-materialize'
+                : ''
+          } ${
             tinaInCorner
               ? `absolute ${CORNERS[corner]} ${TINA_CORNER_SIZE[shape(tinaRatio)]} overflow-hidden rounded-lg shadow-2xl ring-1 ring-white/20 transition-all duration-500`
               : `absolute top-1/2 left-1/2 ${TINA_LARGE_SIZE[shape(tinaRatio)]} -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl shadow-2xl ring-1 ring-white/20 transition-all duration-500`
@@ -758,7 +802,13 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
               }
             }}
           />
+          {entrance.phase === 'playing' && (
+            <div aria-hidden className="hologram-scanlines pointer-events-none absolute inset-0" />
+          )}
         </div>
+      )}
+      {entrance.phase === 'playing' && (
+        <HologramReveal seconds={entrance.ms / 1000} volume={settings.walkup_volume} />
       )}
 
       <div className="absolute top-3 left-3 rounded-full bg-black/60 px-3 py-1 text-xs text-white/90">

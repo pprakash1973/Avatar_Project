@@ -12,6 +12,7 @@ import {
 } from '@phosphor-icons/react/dist/ssr';
 import { MicrophoneSelect } from '@/components/app/microphone-select';
 import { VoiceSelect } from '@/components/app/voice-select';
+import { playRevealSound } from '@/components/ceremony/hologram-reveal';
 import { MusicCard } from '@/components/ceremony/music-card';
 import { Button } from '@/components/ui/button';
 import { LANGUAGES, type LanguageCode, type VoiceCode } from '@/lib/agent-channels';
@@ -937,6 +938,24 @@ export function CeremonySetup({
           <section className="mt-4 rounded-xl border p-4">
             <h2 className="text-sm font-semibold">Announcements, music and style</h2>
             <div className="mt-3 flex flex-col gap-4">
+              <div className="flex flex-col gap-1">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={settings.intro_reveal}
+                    onChange={(e) => updateSettings({ intro_reveal: e.target.checked })}
+                  />
+                  Magical entrance: Tina materializes as a hologram, with a shimmering sound, before
+                  her introduction (6 seconds)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => playRevealSound(settings.walkup_volume)}
+                  className="text-muted-foreground hover:text-foreground flex items-center gap-1 self-start text-xs"
+                >
+                  <SpeakerHighIcon className="size-3.5" /> Hear the entrance sound
+                </button>
+              </div>
               <div className="flex flex-col gap-1">
                 <label className="flex items-center gap-2 text-sm">
                   <input
