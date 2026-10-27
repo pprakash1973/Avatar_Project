@@ -20,11 +20,13 @@ import {
   CONVERSATION_LANGUAGES,
   type CeremonyEvent,
   type CeremonySettings,
+  DEFAULT_EVENT_MUSIC_SECONDS,
   EVENT_TRIGGERS,
   type EventTrigger,
   type ExtractedAward,
   KEYWORD_ACTIONS,
   type KeywordAction,
+  MAX_EVENT_MUSIC_SECONDS,
   type Translations,
   announcementFor,
   announcementParts,
@@ -655,6 +657,38 @@ export function CeremonySetup({
                           speaking={speaking}
                         />
                       </div>
+                      {event.kind !== 'ask_ai' && (event.trigger ?? 'called') === 'called' && (
+                        <div className="text-muted-foreground flex flex-col gap-1 text-xs md:col-span-3">
+                          <span>
+                            Music after Tina&rsquo;s text (optional), e.g. devotional music for the
+                            lamp lighting: an .mp3 or YouTube link. It plays for
+                            <input
+                              type="number"
+                              min={5}
+                              max={MAX_EVENT_MUSIC_SECONDS}
+                              aria-label="Music seconds"
+                              className={`${numberClassName} mx-1 inline-block`}
+                              value={event.music_seconds ?? DEFAULT_EVENT_MUSIC_SECONDS}
+                              onChange={(e) =>
+                                setEvent(index, {
+                                  music_seconds: Math.min(
+                                    MAX_EVENT_MUSIC_SECONDS,
+                                    Math.max(5, Number(e.target.value) || 5)
+                                  ),
+                                })
+                              }
+                            />
+                            seconds (up to {MAX_EVENT_MUSIC_SECONDS}), then fades out; &ldquo;Tina,
+                            stop the music&rdquo; or M ends it sooner.
+                          </span>
+                          <MusicLink
+                            value={event.music ?? ''}
+                            onChange={(music) => setEvent(index, { music: music || undefined })}
+                            settings={settings}
+                            emptyLabel="No music"
+                          />
+                        </div>
+                      )}
                     </div>
                     <button
                       type="button"

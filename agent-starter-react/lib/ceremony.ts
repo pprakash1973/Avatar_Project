@@ -92,7 +92,14 @@ export type CeremonyEvent = {
   translations?: Translations;
   /** 'ask_ai': after its text, Tina answers the audience's questions on stage. */
   kind?: 'say' | 'ask_ai';
+  /** Music played once Tina has said the text (an audio file or YouTube link), e.g.
+   * devotional music for the lamp lighting, for music_seconds. */
+  music?: string;
+  music_seconds?: number;
 };
+
+export const DEFAULT_EVENT_MUSIC_SECONDS = 60;
+export const MAX_EVENT_MUSIC_SECONDS = 300;
 
 /** Audience Q&A: after this, anyone on stage can ask Tina anything, without her name. */
 export const ASK_AI_EVENT: CeremonyEvent = {

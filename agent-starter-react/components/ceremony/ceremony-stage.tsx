@@ -481,6 +481,16 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
             at: Date.now(),
             sticky: Boolean(status.sticky),
           });
+        } else if (status.type === 'event_music') {
+          // The event's music once Tina has said its text, e.g. for the lamp lighting.
+          if (viewRef.current === 'video') {
+            endVideo();
+          }
+          musicRef.current.playFor(
+            String(status.url || ''),
+            Number(status.seconds) || 60,
+            String(status.name || 'Music')
+          );
         } else if (status.type === 'event_end') {
           setEventTitle(null);
         } else if (status.type === 'ceremony_end') {

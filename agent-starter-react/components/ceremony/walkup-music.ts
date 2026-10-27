@@ -211,6 +211,17 @@ export function useWalkupMusic(
     [play]
   );
 
+  /** An event's music (e.g. devotional music for the lamp lighting) for `seconds`. */
+  const playFor = useCallback(
+    (link: string, seconds: number, name: string) => {
+      const source = parseMusicUrl(link);
+      if (source) {
+        play(source, link, seconds, name);
+      }
+    },
+    [play]
+  );
+
   // The countdown's suspense track last played, so the next one differs.
   const lastCountdown = useRef('');
 
@@ -292,6 +303,7 @@ export function useWalkupMusic(
     song,
     start,
     playSong,
+    playFor,
     playCountdown,
     endCountdown,
     stop,

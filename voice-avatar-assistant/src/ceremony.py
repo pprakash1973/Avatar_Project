@@ -322,6 +322,8 @@ class Award:
 
 
 EventTrigger = Literal["called", "appear", "first_call"]
+DEFAULT_EVENT_MUSIC_SECONDS = 60
+MAX_EVENT_MUSIC_SECONDS = 300
 
 
 @dataclass
@@ -342,6 +344,10 @@ class CeremonyEvent:
     translations: dict[str, str] = field(default_factory=dict)
     # "ask_ai": after its text, Tina takes questions from the audience on stage.
     kind: Literal["say", "ask_ai"] = "say"
+    # Played once Tina has said the text, e.g. devotional music for the lamp lighting
+    # (an audio file or YouTube link), for this many seconds.
+    music: str = ""
+    music_seconds: int = DEFAULT_EVENT_MUSIC_SECONDS
     done: bool = False
 
 
@@ -618,6 +624,11 @@ class CeremonyProgram:
                 languages=_languages(e.get("languages")),
                 translations=_translations(e.get("translations")),
                 kind="ask_ai" if e.get("kind") == "ask_ai" else "say",
+                music=str(e.get("music") or "").strip(),
+                music_seconds=min(
+                    max(int(e.get("music_seconds") or DEFAULT_EVENT_MUSIC_SECONDS), 5),
+                    MAX_EVENT_MUSIC_SECONDS,
+                ),
             )
             for e in raw.get("events", []) or []
             if isinstance(e, dict)
@@ -790,6 +801,9 @@ class CeremonyHost(Agent):
         # Tina reminds the host once of awards not yet announced before ending; the
         # host's next "end the ceremony" is final.
         self._end_reminded = False
+        # Events and awards started: an event's music waits for its text, and doesn't
+        # start if the host has moved on by then.
+        self._event_count = 0
         # Not named _instructions: the Agent base class stores its text under that name.
         pause = program.settings.listen_pause
         super().__init__(
@@ -1287,6 +1301,8 @@ class CeremonyHost(Agent):
             pending = entries
 
         session = ctx.session
+        # An event's music still waiting for its text doesn't start over an award.
+        self._event_count += 1
         if self._ask_ai:
             await self._end_ask_ai()
         intro = self._program.intro(category) if pending[0] is entries[0] else ""
@@ -1351,9 +1367,30 @@ class CeremonyHost(Agent):
         await self._send_status(
             {"type": "event", "name": event.name, "sticky": self._ask_ai}
         )
-        self.say_parts(session, await self.event_parts(event))
+        handle = self.say_parts(session, await self.event_parts(event))
         event.done = True
+        self._event_count += 1
+        if event.music and handle:
+            self._run(self._music_after(handle, event, self._event_count))
         await self._refresh()
+
+    async def _music_after(
+        self, handle: SpeechHandle, event: CeremonyEvent, count: int
+    ) -> None:
+        """The event's music, once Tina has said its text (unless the host has moved on
+        to another event by then)."""
+        await handle.wait_for_playout()
+        if count != self._event_count:
+            return
+        logger.info("event music: %s for %ds", event.name, event.music_seconds)
+        await self._send_status(
+            {
+                "type": "event_music",
+                "name": event.name,
+                "url": event.music,
+                "seconds": event.music_seconds,
+            }
+        )
 
     async def event_parts(self, event: CeremonyEvent) -> list[tuple[str, str]]:
         """(language, spoken text) for each of the event's languages."""
