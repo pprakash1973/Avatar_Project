@@ -98,9 +98,13 @@ VOICES = {
     "katie": "f786b574-daa5-4673-aa0c-cbe3e8534c02",
 }
 TINA_VOICE_ID = os.environ.get("TINA_VOICE_ID", VOICES["priya"])
-# Azure voices (AZURE_SPEECH_KEY / AZURE_SPEECH_REGION): Neerja HD speaks English and
-# the Indian languages in the same voice. Cartesia (Priya) takes over if Azure fails.
-AZURE_VOICES = {"neerja": "en-IN-Neerja:DragonHDLatestNeural"}
+# Azure voices (AZURE_SPEECH_KEY / AZURE_SPEECH_REGION): Diya HD and Neerja HD speak
+# English and the Indian languages in the same voice. Cartesia (Priya) takes over if
+# Azure fails.
+AZURE_VOICES = {
+    "diya": "en-IN-Diya:DragonHDLatestNeural",
+    "neerja": "en-IN-Neerja:DragonHDLatestNeural",
+}
 AZURE_LANGUAGES = {"en": "en-IN", "hi": "hi-IN", "ta": "ta-IN", "ml": "ml-IN"}
 
 # No defaults on enum tool params: LiveKit makes defaulted params nullable, and the

@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
 import { toastAlert, useAgentErrors } from '@/hooks/useAgentErrors';
 import { useCallDiagnostics } from '@/hooks/useCallDiagnostics';
-import { DEFAULT_VOICE, VOICES, type VoiceCode } from '@/lib/agent-channels';
+import { CEREMONY_VOICES, DEFAULT_VOICE, type VoiceCode } from '@/lib/agent-channels';
 import {
   type Award,
   type AwardSection,
@@ -108,7 +108,8 @@ export function CeremonyApp({
   const [hostName, setHostName] = useState('');
   useEffect(() => {
     const saved = getSavedVoice();
-    if (VOICES.some((v) => v.code === saved)) {
+    // A voice the ceremony doesn't offer (chosen in the assistant) gives the default.
+    if (CEREMONY_VOICES.includes(saved as VoiceCode)) {
       setVoice(saved as VoiceCode);
     }
     const local = loadSettings();

@@ -18,7 +18,12 @@ import { playRevealSound } from '@/components/ceremony/hologram-reveal';
 import { HostPanel } from '@/components/ceremony/host-panel';
 import { MusicCard } from '@/components/ceremony/music-card';
 import { Button } from '@/components/ui/button';
-import { LANGUAGES, type LanguageCode, type VoiceCode } from '@/lib/agent-channels';
+import {
+  CEREMONY_VOICES,
+  LANGUAGES,
+  type LanguageCode,
+  type VoiceCode,
+} from '@/lib/agent-channels';
 import {
   type Award,
   type AwardSection,
@@ -1646,6 +1651,7 @@ export function CeremonySetup({
                   saveVoice(v);
                 }}
                 disabled={isStarting}
+                voices={CEREMONY_VOICES}
               />
               <label className="text-muted-foreground text-xs">
                 Host name (Tina greets the host by name: {'{name}'} in an event&rsquo;s text)

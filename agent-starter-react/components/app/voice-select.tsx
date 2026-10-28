@@ -12,10 +12,15 @@ interface VoiceSelectProps {
   value: VoiceCode;
   onChange: (voice: VoiceCode) => void;
   disabled?: boolean;
+  /** Only these voices, in this order, each with its provider (the ceremony's choice). */
+  voices?: VoiceCode[];
 }
 
 /** Tina's voice picker; each voice has a short sample played on the chosen speaker. */
-export function VoiceSelect({ value, onChange, disabled }: VoiceSelectProps) {
+export function VoiceSelect({ value, onChange, disabled, voices }: VoiceSelectProps) {
+  const shown = voices
+    ? voices.flatMap((code) => VOICES.filter((v) => v.code === code))
+    : [...VOICES];
   const audioRef = useRef<SinkableAudio | null>(null);
   const [playing, setPlaying] = useState<VoiceCode | null>(null);
 
@@ -44,7 +49,7 @@ export function VoiceSelect({ value, onChange, disabled }: VoiceSelectProps) {
         aria-label="Tina's voice"
         className="flex flex-wrap justify-center gap-2"
       >
-        {VOICES.map((voice) => (
+        {shown.map((voice) => (
           <div
             key={voice.code}
             className={cn(
@@ -63,7 +68,12 @@ export function VoiceSelect({ value, onChange, disabled }: VoiceSelectProps) {
             >
               {voice.label}
               <span className="text-muted-foreground ml-1 font-normal">
-                · {voice.accent === 'Indian English' ? 'Indian' : 'American'}
+                ·{' '}
+                {voices
+                  ? voice.provider
+                  : voice.accent === 'Indian English'
+                    ? 'Indian'
+                    : 'American'}
               </span>
             </button>
             <button

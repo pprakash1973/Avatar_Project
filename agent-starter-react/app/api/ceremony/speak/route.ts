@@ -14,8 +14,11 @@ const VOICE_IDS: Record<string, string> = {
   katie: 'f786b574-daa5-4673-aa0c-cbe3e8534c02',
 };
 
-// Azure voices, as AZURE_VOICES in the agent: Neerja HD speaks every language.
-const AZURE_VOICES: Record<string, string> = { neerja: 'en-IN-Neerja:DragonHDLatestNeural' };
+// Azure voices, as AZURE_VOICES in the agent: Diya HD and Neerja HD speak every language.
+const AZURE_VOICES: Record<string, string> = {
+  diya: 'en-IN-Diya:DragonHDLatestNeural',
+  neerja: 'en-IN-Neerja:DragonHDLatestNeural',
+};
 const AZURE_LANGUAGES: Record<string, string> = {
   en: 'en-IN',
   hi: 'hi-IN',

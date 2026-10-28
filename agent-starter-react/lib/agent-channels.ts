@@ -70,15 +70,20 @@ export const STYLES = [
 export type StyleCode = (typeof STYLES)[number]['code'];
 
 // Tina's voices; keys match VOICES / AZURE_VOICES in voice-avatar-assistant/src/agent.py.
-// Neerja HD is Azure (falls back to Priya); the others are Cartesia.
+// Diya HD and Neerja HD are Azure (falling back to Priya); the others are Cartesia
+// (falling back to Neerja HD).
 export const VOICES = [
-  { code: 'neerja', label: 'Neerja HD', accent: 'Indian English' },
-  { code: 'priya', label: 'Priya', accent: 'Indian English' },
-  { code: 'janvi', label: 'Janvi', accent: 'Indian English' },
-  { code: 'kiara', label: 'Kiara', accent: 'Indian English' },
-  { code: 'simi', label: 'Simi', accent: 'Indian English' },
-  { code: 'katie', label: 'Katie', accent: 'American English' },
+  { code: 'diya', label: 'Diya HD', accent: 'Indian English', provider: 'Azure' },
+  { code: 'neerja', label: 'Neerja HD', accent: 'Indian English', provider: 'Azure' },
+  { code: 'priya', label: 'Priya', accent: 'Indian English', provider: 'Cartesia' },
+  { code: 'janvi', label: 'Janvi', accent: 'Indian English', provider: 'Cartesia' },
+  { code: 'kiara', label: 'Kiara', accent: 'Indian English', provider: 'Cartesia' },
+  { code: 'simi', label: 'Simi', accent: 'Indian English', provider: 'Cartesia' },
+  { code: 'katie', label: 'Katie', accent: 'American English', provider: 'Cartesia' },
 ] as const;
 
 export type VoiceCode = (typeof VOICES)[number]['code'];
 export const DEFAULT_VOICE: VoiceCode = 'neerja';
+/** The ceremony's voices: the two Azure HD voices (every language in one voice), then
+ * Cartesia's Priya. */
+export const CEREMONY_VOICES: VoiceCode[] = ['diya', 'neerja', 'priya'];
