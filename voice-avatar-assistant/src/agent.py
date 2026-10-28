@@ -192,9 +192,10 @@ AVATAR_VIDEO_TIMEOUT_SECONDS = 12
 CEREMONY_FOLLOW_UP_SECONDS = 8.0
 # Ceremony: the pause between Tina appearing and her introduction.
 INTRODUCTION_DELAY_SECONDS = 1.5
-# Ceremony: her magical entrance (a hologram materializing on the stage), before she
-# speaks; matches the stage animation and its sound's chime.
-INTRO_REVEAL_SECONDS = 10.0
+# Ceremony: her magical entrance before she speaks, by style: spotlights sweeping and
+# flashing until she's fully lit, or a hologram materializing. Each matches its stage
+# animation and sound.
+INTRO_REVEAL_SECONDS = {"spotlight": 20.0, "hologram": 10.0}
 
 
 AVATAR_KEYS = {"anam": "ANAM_API_KEY", "simli": "SIMLI_API_KEY"}
@@ -814,13 +815,15 @@ async def run_ceremony(
         introduction += await host.event_parts(event)
     if program.settings.intro_reveal:
         # Her entrance plays on the stage; she speaks once she has materialized.
-        call_log.add("entrance")
+        style = program.settings.intro_style
+        seconds = INTRO_REVEAL_SECONDS[style]
+        call_log.add("entrance", style=style)
         await send_ui(
             ctx.room,
             UI_STATUS_TOPIC,
-            {"type": "intro_reveal", "seconds": INTRO_REVEAL_SECONDS},
+            {"type": "intro_reveal", "seconds": seconds, "style": style},
         )
-        await asyncio.sleep(INTRO_REVEAL_SECONDS)
+        await asyncio.sleep(seconds)
     else:
         # Give the stage a moment to show her video before she speaks.
         await asyncio.sleep(INTRODUCTION_DELAY_SECONDS)

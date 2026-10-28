@@ -56,6 +56,9 @@ export type CeremonySettings = {
   /** Tina's entrance: she materializes as a hologram, with a shimmering sound, before
    * her introduction. */
   intro_reveal: boolean;
+  /** Its look: spotlights sweeping and flashing until she's fully lit (20 s), or a
+   * hologram materializing (10 s). */
+  intro_style: 'spotlight' | 'hologram';
   /** Play walk-up music after each winner (the built-in clap-along beat by default). */
   walkup: boolean;
   /** How long the music plays after the last winner of a category, in seconds. */
@@ -285,6 +288,7 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   suspense_seconds: 5,
   suspense_music: true,
   intro_reveal: true,
+  intro_style: 'spotlight',
   walkup: true,
   walkup_seconds: 30,
   walkup_volume: 0.6,

@@ -17,6 +17,7 @@ import { FloatingRemote, useFloatingRemote } from '@/components/ceremony/floatin
 import { playRevealSound } from '@/components/ceremony/hologram-reveal';
 import { HostPanel } from '@/components/ceremony/host-panel';
 import { MusicCard } from '@/components/ceremony/music-card';
+import { playSpotlightSound } from '@/components/ceremony/spotlight-reveal';
 import { Button } from '@/components/ui/button';
 import {
   CEREMONY_VOICES,
@@ -1137,12 +1138,32 @@ export function CeremonySetup({
                     checked={settings.intro_reveal}
                     onChange={(e) => updateSettings({ intro_reveal: e.target.checked })}
                   />
-                  Magical entrance: Tina materializes as a hologram, with a shimmering sound, before
-                  her introduction (10 seconds)
+                  Magical entrance before Tina&rsquo;s introduction
                 </label>
+                <select
+                  aria-label="Entrance style"
+                  className={inputClassName}
+                  disabled={!settings.intro_reveal}
+                  value={settings.intro_style}
+                  onChange={(e) =>
+                    updateSettings({ intro_style: e.target.value as 'spotlight' | 'hologram' })
+                  }
+                >
+                  <option value="spotlight">
+                    Spotlight premiere (20 seconds): sweeping, flashing spotlights and falling
+                    lights; camera flashes light Tina up until she&rsquo;s fully visible
+                  </option>
+                  <option value="hologram">
+                    Hologram (10 seconds): Tina materializes in a beam of light
+                  </option>
+                </select>
                 <button
                   type="button"
-                  onClick={() => playRevealSound(settings.walkup_volume)}
+                  onClick={() =>
+                    settings.intro_style === 'hologram'
+                      ? playRevealSound(settings.walkup_volume)
+                      : playSpotlightSound(settings.walkup_volume)
+                  }
                   className="text-muted-foreground hover:text-foreground flex items-center gap-1 self-start text-xs"
                 >
                   <SpeakerHighIcon className="size-3.5" /> Hear the entrance sound

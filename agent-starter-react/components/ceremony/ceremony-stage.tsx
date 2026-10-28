@@ -20,6 +20,7 @@ import type { LoadedEventSlides } from '@/components/ceremony/event-slides';
 import { HologramReveal, PreRevealOrb } from '@/components/ceremony/hologram-reveal';
 import { LuckyDraw } from '@/components/ceremony/lucky-draw';
 import { MusicCard } from '@/components/ceremony/music-card';
+import { SpotlightReveal } from '@/components/ceremony/spotlight-reveal';
 import {
   type StageVideo,
   type VideoControls,
@@ -390,12 +391,14 @@ export function CeremonyStage({
     askAi: boolean;
     luckyNumbers: number[];
   }>({ eventsDone: [], awardsDone: {}, askAi: false, luckyNumbers: [] });
-  // Tina's entrance: hidden behind a glowing orb until it starts, then she materializes
-  // as a hologram for `ms`.
+  // Tina's entrance: hidden behind a glowing orb until it starts, then, for `ms`, lit up
+  // by sweeping, flashing spotlights or materializing as a hologram (`style`).
   const [entrance, setEntrance] = useState<{
     phase: 'waiting' | 'playing' | 'done';
     ms: number;
+    style?: 'spotlight' | 'hologram';
   }>(() => ({ phase: settings.intro_reveal ? 'waiting' : 'done', ms: 0 }));
+  const spotlight = entrance.style !== 'hologram';
   // The event Tina is opening ("Lamp Lighting"), typed in above her.
   // sticky: kept up until the event ends (Ask AI), not just for EVENT_TITLE_MS.
   const [eventTitle, setEventTitle] = useState<{
@@ -665,7 +668,12 @@ export function CeremonyStage({
             return d;
           });
         } else if (status.type === 'intro_reveal') {
-          setEntrance({ phase: 'playing', ms: (Number(status.seconds) || 10) * 1000 });
+          setEntrance({
+            phase: 'playing',
+            ms: (Number(status.seconds) || 10) * 1000,
+            // An older agent sends no style: its 10 seconds are the hologram's.
+            style: status.style === 'spotlight' ? 'spotlight' : 'hologram',
+          });
         } else if (status.type === 'event') {
           // A programme item, e.g. the lamp lighting: the music or video makes way.
           if (viewRef.current === 'video') {
@@ -1083,7 +1091,9 @@ export function CeremonyStage({
             entrance.phase === 'waiting'
               ? 'opacity-0'
               : entrance.phase === 'playing'
-                ? 'hologram-materialize'
+                ? spotlight
+                  ? 'spotlight-materialize'
+                  : 'hologram-materialize'
                 : ''
           } ${
             tinaInCorner
@@ -1101,12 +1111,15 @@ export function CeremonyStage({
               }
             }}
           />
-          {entrance.phase === 'playing' && (
+          {entrance.phase === 'playing' && !spotlight && (
             <div aria-hidden className="hologram-scanlines pointer-events-none absolute inset-0" />
           )}
         </div>
       )}
-      {entrance.phase === 'playing' && (
+      {entrance.phase === 'playing' && spotlight && (
+        <SpotlightReveal seconds={entrance.ms / 1000} volume={settings.walkup_volume} />
+      )}
+      {entrance.phase === 'playing' && !spotlight && (
         <HologramReveal seconds={entrance.ms / 1000} volume={settings.walkup_volume} />
       )}
 

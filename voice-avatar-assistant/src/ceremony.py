@@ -615,6 +615,7 @@ class CeremonySettings:
     suspense_seconds: float = DEFAULT_SUSPENSE_SECONDS
     # Tina's entrance: she materializes as a hologram on the stage before she speaks.
     intro_reveal: bool = True
+    intro_style: Literal["spotlight", "hologram"] = "spotlight"
     congratulations: str = DEFAULT_CONGRATULATIONS
     # Phrases the host can say without "Tina", e.g. "please hold".
     keywords: list[tuple[str, KeywordAction]] = field(
@@ -719,6 +720,9 @@ class CeremonyProgram:
             ),
             suspense=raw.get("suspense", True) is not False,
             intro_reveal=raw.get("intro_reveal", True) is not False,
+            intro_style="hologram"
+            if raw.get("intro_style") == "hologram"
+            else "spotlight",
             suspense_seconds=min(
                 max(
                     float(raw.get("suspense_seconds") or DEFAULT_SUSPENSE_SECONDS), 1.0

@@ -397,6 +397,105 @@
   mix-blend-mode: screen;
   animation: hologram-scanlines var(--reveal-ms, 10000ms) linear both;
 }
+/* The spotlight entrance (over --reveal-ms): Tina is unseen while the spotlights sweep,
+   then each big camera flash (45%, 55% ... 83%, as BIG_FLASHES in spotlight-reveal.tsx)
+   shows her brightly for a moment, a little more each time, until the final burst at
+   90% leaves her fully lit. */
+@keyframes spotlight-materialize {
+  0%,
+  44.5% {
+    opacity: 0;
+    filter: brightness(2.5) saturate(0.4) blur(6px);
+  }
+  45% {
+    opacity: 0.6;
+    filter: brightness(2.6) saturate(0.4) blur(3px);
+  }
+  48% {
+    opacity: 0.06;
+    filter: brightness(1.6) blur(4px);
+  }
+  55% {
+    opacity: 0.12;
+  }
+  55.5% {
+    opacity: 0.68;
+    filter: brightness(2.4) saturate(0.5) blur(2px);
+  }
+  58% {
+    opacity: 0.16;
+  }
+  62% {
+    opacity: 0.2;
+  }
+  62.5% {
+    opacity: 0.74;
+    filter: brightness(2.2) saturate(0.6) blur(1.5px);
+  }
+  65% {
+    opacity: 0.26;
+  }
+  68% {
+    opacity: 0.3;
+  }
+  68.5% {
+    opacity: 0.8;
+    filter: brightness(2) saturate(0.7) blur(1px);
+  }
+  71% {
+    opacity: 0.36;
+  }
+  73% {
+    opacity: 0.4;
+  }
+  73.5% {
+    opacity: 0.85;
+    filter: brightness(1.9) saturate(0.8) blur(0.5px);
+  }
+  76% {
+    opacity: 0.46;
+  }
+  78% {
+    opacity: 0.5;
+  }
+  78.5% {
+    opacity: 0.9;
+    filter: brightness(1.8) saturate(0.85) blur(0);
+  }
+  81% {
+    opacity: 0.56;
+  }
+  83% {
+    opacity: 0.6;
+  }
+  83.5% {
+    opacity: 0.94;
+    filter: brightness(1.7) saturate(0.9);
+  }
+  86% {
+    opacity: 0.66;
+    filter: brightness(1.2) saturate(0.9);
+  }
+  89.5% {
+    opacity: 0.72;
+    filter: brightness(1.1) saturate(0.95);
+  }
+  90% {
+    opacity: 1;
+    filter: brightness(2.8) saturate(0.5);
+  }
+  95% {
+    opacity: 1;
+    filter: brightness(1.15) saturate(1);
+  }
+  100% {
+    opacity: 1;
+    filter: none;
+  }
+}
+.spotlight-materialize {
+  animation: spotlight-materialize var(--reveal-ms, 20000ms) linear both;
+}
 @keyframes orb-pulse {
   from {
     opacity: 0.45;
@@ -525,7 +624,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hologram-materialize {
+  .hologram-materialize,
+  .spotlight-materialize {
     animation: curtains-fade 1s ease-out reverse both;
   }
   .hologram-scanlines,
