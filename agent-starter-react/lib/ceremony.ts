@@ -20,7 +20,17 @@ export type Award = {
   /** Optional music link (an audio file such as .mp3) played after this winner's
    * congratulations; otherwise the general walk-up music. */
   music?: string;
+  /** The award section (its id) this award belongs to; none: the first section.
+   * `slide` is a slide of that section's PDF. */
+  section?: string;
 };
+
+/** A group of awards with its own PDF, e.g. "Sports Awards", presented in turn. */
+export type AwardSection = { id: string; name: string };
+
+/** The first section; its PDF is the deck uploaded before there were sections. */
+export const FIRST_SECTION_ID = 'main';
+export const DEFAULT_SECTIONS: AwardSection[] = [{ id: FIRST_SECTION_ID, name: 'Awards' }];
 
 export type CeremonySettings = {
   /** Seconds between the winners of one category (all are announced together). */
@@ -69,6 +79,8 @@ export type CeremonySettings = {
   saved_at?: number;
   /** Set once the Ask AI event was added to these settings (so a removed one stays removed). */
   ask_ai_offered?: boolean;
+  /** The same for the Lucky Draw event. */
+  lucky_draw_offered?: boolean;
 };
 
 export type Song = { name: string; url: string };
@@ -93,13 +105,20 @@ export type CeremonyEvent = {
   trigger?: EventTrigger;
   languages?: LanguageCode[];
   translations?: Translations;
-  /** 'ask_ai': after its text, Tina answers the audience's questions on stage. */
-  kind?: 'say' | 'ask_ai';
+  /** 'ask_ai': after its text, Tina answers the audience's questions on stage.
+   * 'lucky_draw': after its text, Tina draws a lucky number from draw_from to draw_to. */
+  kind?: EventKind;
+  draw_from?: number;
+  draw_to?: number;
+  /** How many lucky draws are planned: the host can roll again that often (or more). */
+  draws?: number;
   /** Music played once Tina has said the text (an audio file or YouTube link), e.g.
    * devotional music for the lamp lighting, for music_seconds. */
   music?: string;
   music_seconds?: number;
 };
+
+export type EventKind = 'say' | 'ask_ai' | 'lucky_draw';
 
 export const DEFAULT_EVENT_MUSIC_SECONDS = 60;
 export const MAX_EVENT_MUSIC_SECONDS = 300;
@@ -112,6 +131,17 @@ export const ASK_AI_EVENT: CeremonyEvent = {
   script:
     "It's time for Ask AI! Come up to the stage and ask me anything that comes to your mind. " +
     "I'll do my best to answer, or at least make you smile.",
+};
+
+/** The lucky draw: Tina draws a number in this range, the jar spinning for 30 seconds. */
+export const LUCKY_DRAW_EVENT: CeremonyEvent = {
+  name: 'Lucky Draw',
+  trigger: 'called',
+  kind: 'lucky_draw',
+  draw_from: 1000,
+  draw_to: 5000,
+  draws: 5,
+  script: "It's time for our lucky draw! Let's see whose number comes out of the jar.",
 };
 
 /** A placeholder left in an event's text, e.g. "[Leader Name, Designation]". */
@@ -272,8 +302,10 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
         'occasion truly special. Let us celebrate excellence and achievement together!',
     },
     ASK_AI_EVENT,
+    LUCKY_DRAW_EVENT,
   ],
   ask_ai_offered: true,
+  lucky_draw_offered: true,
   songs: [],
   keywords: [
     { phrase: 'please repeat', action: 'repeat' },
@@ -315,6 +347,7 @@ export const defaultScript = (a: ExtractedAward, previous?: ExtractedAward) =>
         .join(' ');
 
 const AWARDS_KEY = 'avatar.ceremony.awards';
+const SECTIONS_KEY = 'avatar.ceremony.sections';
 const SETTINGS_KEY = 'avatar.ceremony.settings';
 const OLD_DEFAULT_GREETING =
   "Hello everyone! I'm Tina, and I'm delighted to be your co-host today. Whenever you're ready, just call my name.";
@@ -397,6 +430,13 @@ function migrate(saved: Record<string, unknown>): CeremonySettings {
     }
     settings.ask_ai_offered = true;
   }
+  // The lucky draw came later: offer it once too.
+  if (!saved.lucky_draw_offered) {
+    if (!settings.events.some((e) => e.kind === 'lucky_draw')) {
+      settings.events = [...settings.events, LUCKY_DRAW_EVENT];
+    }
+    settings.lucky_draw_offered = true;
+  }
   return settings;
 }
 
@@ -478,22 +518,69 @@ function openDb(): Promise<IDBDatabase> {
 }
 
 /** Keeps the deck in the browser so a page reload doesn't lose it. */
-export async function saveDeck(file: Blob): Promise<void> {
+// The first section keeps the key the single deck had.
+const deckKey = (sectionId: string) =>
+  sectionId === FIRST_SECTION_ID ? PDF_KEY : `${PDF_KEY}:${sectionId}`;
+
+/** A section's PDF; null removes it. */
+export const saveDeck = (sectionId: string, file: Blob | null) =>
+  saveFile(deckKey(sectionId), file);
+export const loadDeck = (sectionId: string) => loadFile(deckKey(sectionId));
+
+export function loadSections(): AwardSection[] {
   try {
-    const db = await openDb();
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put(file, PDF_KEY);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
+    const raw = window.localStorage.getItem(SECTIONS_KEY);
+    const sections = raw ? (JSON.parse(raw) as AwardSection[]) : [];
+    return sections.length ? sections : DEFAULT_SECTIONS;
   } catch {
-    // Storage unavailable: the deck must be re-uploaded after a reload.
+    return DEFAULT_SECTIONS;
   }
 }
 
-export async function loadDeck(): Promise<Blob | null> {
-  return loadFile(PDF_KEY);
+export function saveSections(sections: AwardSection[]) {
+  try {
+    window.localStorage.setItem(SECTIONS_KEY, JSON.stringify(sections));
+  } catch {
+    // Not persisted; still usable for this session.
+  }
+}
+
+/** The section an award belongs to (the first one if its own was removed). */
+export const sectionOf = (award: Award, sections: AwardSection[]) =>
+  sections.find((s) => s.id === award.section) ?? sections[0];
+
+/** A section with its PDF (null: none uploaded yet). */
+export type SectionDeck<Doc> = AwardSection & { doc: Doc | null };
+
+/** The first slide number of each section's PDF when they're numbered one after another
+ * (as Tina knows them): section 1's slides first, then section 2's, and so on. */
+export function slideOffsets(decks: SectionDeck<{ numPages: number }>[]) {
+  const offsets: Record<string, number> = {};
+  let total = 0;
+  for (const deck of decks) {
+    offsets[deck.id] = total;
+    total += deck.doc?.numPages ?? 0;
+  }
+  return { offsets, total };
+}
+
+/** The awards as Tina gets them: in section order, each with its section's name (when
+ * there are several) and its slide numbered across all the sections' PDFs. */
+export function programAwards(
+  awards: Award[],
+  decks: SectionDeck<{ numPages: number }>[]
+): Award[] {
+  const { offsets } = slideOffsets(decks);
+  const named = decks.length > 1;
+  return decks.flatMap((deck, i) =>
+    awards
+      .filter((a) => sectionOf(a, decks).id === deck.id)
+      .map((a) => ({
+        ...a,
+        slide: offsets[deck.id] + a.slide,
+        section: named ? deck.name.trim() || `Section ${i + 1}` : '',
+      }))
+  );
 }
 
 const OVATION_KEY = 'ovation';

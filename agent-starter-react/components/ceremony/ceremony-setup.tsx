@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button';
 import { LANGUAGES, type LanguageCode, type VoiceCode } from '@/lib/agent-channels';
 import {
   type Award,
+  type AwardSection,
   CONVERSATION_LANGUAGES,
   type CeremonyEvent,
   type CeremonySettings,
@@ -30,14 +31,13 @@ import {
   KEYWORD_ACTIONS,
   type KeywordAction,
   MAX_EVENT_MUSIC_SECONDS,
+  type SectionDeck,
   type Translations,
   announcementFor,
   announcementParts,
   congratulationsFor,
   defaultScript,
   greetingFor,
-  loadAwards,
-  loadDeck,
   loadOvationPhoto,
   loadWalkupMusic,
   parseAwardMusic,
@@ -46,8 +46,11 @@ import {
   saveAwards,
   saveDeck,
   saveOvationPhoto,
+  saveSections,
   saveSettingsEverywhere,
   saveWalkupMusic,
+  sectionOf,
+  slideOffsets,
   spokenText,
 } from '@/lib/ceremony';
 import { announceSettingsSaved } from '@/lib/host-channel';
@@ -81,8 +84,10 @@ const TABS: { code: SetupTab; label: string }[] = [
 const TAB_KEY = 'avatar.ceremony.setup-tab';
 
 interface CeremonySetupProps {
-  deck: PDFDocumentProxy | null;
-  onDeckChange: (deck: PDFDocumentProxy | null) => void;
+  /** The award sections, each with its PDF. */
+  decks: SectionDeck<PDFDocumentProxy>[];
+  onDocChange: (sectionId: string, doc: PDFDocumentProxy | null) => void;
+  onSectionsChange: (sections: AwardSection[]) => void;
   awards: Award[];
   onAwardsChange: (awards: Award[]) => void;
   voice: VoiceCode;
@@ -96,8 +101,9 @@ interface CeremonySetupProps {
 }
 
 export function CeremonySetup({
-  deck,
-  onDeckChange,
+  decks,
+  onDocChange,
+  onSectionsChange,
   awards,
   onAwardsChange,
   voice,
@@ -266,70 +272,97 @@ export function CeremonySetup({
     }, settings.walkup_seconds * 1000);
   };
 
-  const [thumbnails, setThumbnails] = useState<string[]>([]);
+  // Slide thumbnails per section.
+  const [thumbnails, setThumbnails] = useState<Record<string, string[]>>({});
+  // What's being read, and for which section.
   const [status, setStatus] = useState('');
+  const [busySection, setBusySection] = useState<string | null>(null);
+  const isBusy = busySection !== null;
   const [error, setError] = useState('');
-  const [isBusy, setIsBusy] = useState(false);
+  const sections: AwardSection[] = decks;
 
-  // Restore the deck and award list prepared earlier on this laptop.
+  const docKey = decks.map((d) => `${d.id}:${d.doc?.numPages ?? 0}`).join(',');
   useEffect(() => {
-    onAwardsChange(loadAwards());
-    void (async () => {
-      const saved = await loadDeck();
-      if (saved) {
-        onDeckChange(await openPdf(await saved.arrayBuffer()));
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (!deck) {
-      setThumbnails([]);
-      return;
-    }
     let cancelled = false;
     void (async () => {
-      const images: string[] = [];
-      for (let n = 1; n <= deck.numPages; n++) {
-        images.push(await pageImage(deck, n, 240, 0.6));
+      const all: Record<string, string[]> = {};
+      for (const deck of decks) {
+        if (!deck.doc) {
+          continue;
+        }
+        const images: string[] = [];
+        for (let n = 1; n <= deck.doc.numPages; n++) {
+          images.push(await pageImage(deck.doc, n, 240, 0.6));
+        }
+        all[deck.id] = images;
       }
       if (!cancelled) {
-        setThumbnails(images);
+        setThumbnails(all);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [deck]);
+    // The thumbnails follow the PDFs (docKey), not each render's new deck list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docKey]);
 
+  /** Saves the awards, kept in section order (each section's awards together). */
   const update = (next: Award[]) => {
-    onAwardsChange(next);
-    saveAwards(next);
+    const order = (a: Award) => sections.indexOf(sectionOf(a, sections));
+    const sorted = next
+      .map((award, i) => ({ award, i }))
+      .sort((a, b) => order(a.award) - order(b.award) || a.i - b.i)
+      .map((x) => x.award);
+    onAwardsChange(sorted);
+    saveAwards(sorted);
   };
 
-  const handleFile = async (file: File) => {
-    setError('');
-    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-      setError('Please upload the deck exported as PDF (PowerPoint: File → Export → PDF).');
+  const updateSections = (next: AwardSection[]) => {
+    onSectionsChange(next);
+    saveSections(next);
+  };
+  const addSection = () =>
+    updateSections([...sections, { id: crypto.randomUUID().slice(0, 8), name: '' }]);
+  const removeSection = async (section: AwardSection) => {
+    const count = awards.filter((a) => sectionOf(a, sections).id === section.id).length;
+    if (
+      !window.confirm(
+        `Remove the section ${section.name || 'without a name'}${count ? ` and its ${count} awards` : ''}?`
+      )
+    ) {
       return;
     }
-    setIsBusy(true);
+    const rest = sections.filter((s) => s.id !== section.id);
+    update(awards.filter((a) => sectionOf(a, sections).id !== section.id));
+    updateSections(rest);
+    onDocChange(section.id, null);
+    await saveDeck(section.id, null);
+  };
+
+  const handleFile = async (file: File, sectionId: string) => {
+    setError('');
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      setError('Please upload the slides exported as PDF (PowerPoint: File → Export → PDF).');
+      return;
+    }
+    setBusySection(sectionId);
     try {
-      setStatus('Opening the deck…');
+      setStatus('Opening the PDF…');
       const doc = await openPdf(await file.arrayBuffer());
-      await saveDeck(file);
-      onDeckChange(doc);
-      await extract(doc);
+      await saveDeck(sectionId, file);
+      onDocChange(sectionId, doc);
+      await extract(doc, sectionId);
     } catch (e) {
       setError(`Could not open the PDF: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setIsBusy(false);
+      setBusySection(null);
       setStatus('');
     }
   };
 
-  const extract = async (doc: PDFDocumentProxy) => {
+  /** Reads the section's awards from its PDF; they replace the section's list. */
+  const extract = async (doc: PDFDocumentProxy, sectionId: string) => {
     setStatus(`Reading ${doc.numPages} slides…`);
     const pages: { page: number; text: string; image?: string }[] = [];
     let size = 0;
@@ -364,19 +397,34 @@ export function CeremonySetup({
     const intros = new Map(
       awards.filter((a) => a.intro).map((a) => [categoryKey(a.category), a.intro])
     );
-    update(
-      found.map((a, i) => ({
+    update([
+      ...awards.filter((a) => sectionOf(a, sections).id !== sectionId),
+      ...found.map((a, i) => ({
         category: a.category,
         winner: a.winner,
         script: defaultScript(a, found[i - 1]),
         slide: a.slide,
+        section: sectionId,
         music: music.get(key(a)),
         intro:
           found.findIndex((f) => categoryKey(f.category) === categoryKey(a.category)) === i
             ? intros.get(categoryKey(a.category))
             : undefined,
-      }))
-    );
+      })),
+    ]);
+  };
+  const reread = (deck: SectionDeck<PDFDocumentProxy>) => {
+    if (!deck.doc) {
+      return;
+    }
+    setBusySection(deck.id);
+    setError('');
+    extract(deck.doc, deck.id)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => {
+        setBusySection(null);
+        setStatus('');
+      });
   };
 
   const setEvent = (index: number, patch: Partial<CeremonyEvent>) =>
@@ -429,7 +477,13 @@ export function CeremonySetup({
   const setField = <K extends keyof Award>(index: number, key: K, value: Award[K]) =>
     update(awards.map((a, i) => (i === index ? { ...a, [key]: value } : a)));
 
-  const ready = deck && awards.length > 0 && awards.every((a) => a.category && a.script);
+  // Every section with awards needs its PDF (the slides shown while announcing).
+  const missingPdf = decks.filter(
+    (d) => !d.doc && awards.some((a) => sectionOf(a, sections).id === d.id)
+  );
+  const awardsOk = awards.every((a) => a.category && a.script);
+  const ready = awards.length > 0 && awardsOk && missingPdf.length === 0;
+  const totalSlides = slideOffsets(decks).total;
 
   // The tab last open on this laptop (restored after the first render, which the server
   // also makes).
@@ -584,7 +638,7 @@ export function CeremonySetup({
                         When Tina says it
                         <select
                           className={inputClassName}
-                          disabled={event.kind === 'ask_ai'}
+                          disabled={event.kind === 'ask_ai' || event.kind === 'lucky_draw'}
                           value={event.trigger ?? 'called'}
                           onChange={(e) =>
                             setEvent(index, { trigger: e.target.value as EventTrigger })
@@ -602,7 +656,7 @@ export function CeremonySetup({
                         <input
                           type="number"
                           min={0}
-                          max={deck?.numPages}
+                          max={totalSlides || undefined}
                           disabled={(event.trigger ?? 'called') !== 'called'}
                           className={inputClassName}
                           value={event.slide || ''}
@@ -633,6 +687,74 @@ export function CeremonySetup({
                           religion). It ends when the host says &ldquo;Tina, end Ask AI&rdquo; or
                           calls another event or award.
                         </p>
+                      )}
+                      {event.kind === 'lucky_draw' && (
+                        <div className="flex flex-col gap-2 rounded-md bg-amber-500/10 p-2 text-xs md:col-span-3">
+                          <p>
+                            <strong>Lucky draw.</strong> After this text a lucky jar spins on the
+                            screen for 30 seconds with suspense music, then the number falls out of
+                            the jar digit by digit, left to right, as Tina calls out each one. Every
+                            draw gives a new number; no number comes up twice.
+                          </p>
+                          <span className="flex flex-wrap items-center gap-2">
+                            Numbers from
+                            <input
+                              type="number"
+                              min={0}
+                              aria-label="Lowest number"
+                              className={`${numberClassName} w-24`}
+                              value={event.draw_from ?? 1000}
+                              onChange={(e) =>
+                                setEvent(index, {
+                                  draw_from: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                                })
+                              }
+                            />
+                            to
+                            <input
+                              type="number"
+                              min={0}
+                              aria-label="Highest number"
+                              className={`${numberClassName} w-24`}
+                              value={event.draw_to ?? 5000}
+                              onChange={(e) =>
+                                setEvent(index, {
+                                  draw_to: Math.max(0, Math.floor(Number(e.target.value) || 0)),
+                                })
+                              }
+                            />
+                          </span>
+                          <span className="flex flex-wrap items-center gap-2">
+                            Number of draws (the host rolls again for each)
+                            <input
+                              type="number"
+                              min={1}
+                              max={50}
+                              aria-label="Number of draws"
+                              className={numberClassName}
+                              value={event.draws ?? 5}
+                              onChange={(e) =>
+                                setEvent(index, {
+                                  draws: Math.min(
+                                    50,
+                                    Math.max(1, Math.floor(Number(e.target.value) || 1))
+                                  ),
+                                })
+                              }
+                            />
+                          </span>
+                          <p className="text-muted-foreground">
+                            The text above opens the first draw. For the next ones, the host clicks{' '}
+                            <strong>Roll again</strong> on the remote or says &ldquo;Tina, roll
+                            again&rdquo;, and Tina says &ldquo;Let&rsquo;s roll again! Lucky draw
+                            number 2 of {event.draws ?? 5}&rdquo;.
+                          </p>
+                          {(event.draw_from ?? 1000) > (event.draw_to ?? 5000) && (
+                            <p role="alert" className="text-amber-600">
+                              The first number should be the lower one.
+                            </p>
+                          )}
+                        </div>
                       )}
                       {placeholder && (
                         <p role="alert" className="text-xs text-amber-600 md:col-span-3">
@@ -668,38 +790,39 @@ export function CeremonySetup({
                           speaking={speaking}
                         />
                       </div>
-                      {event.kind !== 'ask_ai' && (event.trigger ?? 'called') === 'called' && (
-                        <div className="text-muted-foreground flex flex-col gap-1 text-xs md:col-span-3">
-                          <span>
-                            Music after Tina&rsquo;s text (optional), e.g. devotional music for the
-                            lamp lighting: an .mp3 or YouTube link. It plays for
-                            <input
-                              type="number"
-                              min={5}
-                              max={MAX_EVENT_MUSIC_SECONDS}
-                              aria-label="Music seconds"
-                              className={`${numberClassName} mx-1 inline-block`}
-                              value={event.music_seconds ?? DEFAULT_EVENT_MUSIC_SECONDS}
-                              onChange={(e) =>
-                                setEvent(index, {
-                                  music_seconds: Math.min(
-                                    MAX_EVENT_MUSIC_SECONDS,
-                                    Math.max(5, Number(e.target.value) || 5)
-                                  ),
-                                })
-                              }
+                      {(event.kind ?? 'say') === 'say' &&
+                        (event.trigger ?? 'called') === 'called' && (
+                          <div className="text-muted-foreground flex flex-col gap-1 text-xs md:col-span-3">
+                            <span>
+                              Music after Tina&rsquo;s text (optional), e.g. devotional music for
+                              the lamp lighting: an .mp3 or YouTube link. It plays for
+                              <input
+                                type="number"
+                                min={5}
+                                max={MAX_EVENT_MUSIC_SECONDS}
+                                aria-label="Music seconds"
+                                className={`${numberClassName} mx-1 inline-block`}
+                                value={event.music_seconds ?? DEFAULT_EVENT_MUSIC_SECONDS}
+                                onChange={(e) =>
+                                  setEvent(index, {
+                                    music_seconds: Math.min(
+                                      MAX_EVENT_MUSIC_SECONDS,
+                                      Math.max(5, Number(e.target.value) || 5)
+                                    ),
+                                  })
+                                }
+                              />
+                              seconds (up to {MAX_EVENT_MUSIC_SECONDS}), then fades out;
+                              &ldquo;Tina, stop the music&rdquo; or M ends it sooner.
+                            </span>
+                            <MusicLink
+                              value={event.music ?? ''}
+                              onChange={(music) => setEvent(index, { music: music || undefined })}
+                              settings={settings}
+                              emptyLabel="No music"
                             />
-                            seconds (up to {MAX_EVENT_MUSIC_SECONDS}), then fades out; &ldquo;Tina,
-                            stop the music&rdquo; or M ends it sooner.
-                          </span>
-                          <MusicLink
-                            value={event.music ?? ''}
-                            onChange={(music) => setEvent(index, { music: music || undefined })}
-                            settings={settings}
-                            emptyLabel="No music"
-                          />
-                        </div>
-                      )}
+                          </div>
+                        )}
                     </div>
                     <button
                       type="button"
@@ -745,201 +868,249 @@ export function CeremonySetup({
 
       {tab === 'awards' && (
         <>
-          <section className="mt-6 rounded-xl border p-4">
-            <h2 className="text-sm font-semibold">Presentation (PDF)</h2>
-            <div className="mt-2 flex flex-wrap items-center gap-3">
-              <label className="border-input hover:bg-accent cursor-pointer rounded-full border px-4 py-2 text-sm font-medium">
-                {deck ? 'Replace deck' : 'Upload deck (PDF)'}
-                <input
-                  type="file"
-                  accept="application/pdf,.pdf"
-                  className="hidden"
-                  disabled={isBusy}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = '';
-                    if (file) {
-                      void handleFile(file);
-                    }
-                  }}
-                />
-              </label>
-              {deck && (
-                <span className="text-muted-foreground text-sm">{deck.numPages} slides loaded</span>
-              )}
-              {deck && !isBusy && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setIsBusy(true);
-                    setError('');
-                    extract(deck)
-                      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-                      .finally(() => {
-                        setIsBusy(false);
-                        setStatus('');
-                      });
-                  }}
-                >
-                  Re-read awards from slides
-                </Button>
-              )}
-            </div>
-            {status && (
-              <p className="text-muted-foreground mt-2 flex items-center gap-2 text-sm">
-                <CircleNotchIcon weight="bold" className="size-4 animate-spin" /> {status}
-              </p>
-            )}
-          </section>
-
-          <section className="mt-4 rounded-xl border p-4">
-            <h2 className="text-sm font-semibold">Announcements ({awards.length})</h2>
-            <p className="text-muted-foreground mt-1 text-xs">
-              Tina reads the announcement text word-for-word. Spell names the way they should sound
-              if needed. Winners stay on this laptop and are only sent to Tina when the ceremony
-              starts.
-            </p>
-            <ol className="mt-3 flex flex-col gap-3">
-              {awards.map((award, index) => (
-                <li key={index} className="flex flex-col gap-3 rounded-lg border p-3 md:flex-row">
-                  {thumbnails[award.slide - 1] && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={thumbnails[award.slide - 1]}
-                      alt={`Slide ${award.slide}`}
-                      className="h-fit w-full rounded border md:w-40"
+          <p className="text-muted-foreground mt-4 text-xs">
+            Group the awards in sections, e.g. Sports Awards, Cultural Awards, Service Awards, each
+            with its own slides (PDF). Sections are presented in this order; each opens with the
+            stage curtains. Tina reads every announcement word-for-word. Winners stay on this laptop
+            and are only sent to Tina when the ceremony starts.
+          </p>
+          {decks.map((deck, sectionIndex) => {
+            const entries = awards
+              .map((award, index) => ({ award, index }))
+              .filter(({ award }) => sectionOf(award, sections).id === deck.id);
+            const busy = busySection === deck.id;
+            return (
+              <section key={deck.id} className="mt-4 rounded-xl border p-4">
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="text-muted-foreground min-w-56 flex-1 text-xs">
+                    Section {sectionIndex + 1}: award category name
+                    <input
+                      className={`${inputClassName} text-base font-semibold`}
+                      value={deck.name}
+                      placeholder="e.g. Sports Awards"
+                      onChange={(e) =>
+                        updateSections(
+                          sections.map((s) =>
+                            s.id === deck.id ? { id: s.id, name: e.target.value } : s
+                          )
+                        )
+                      }
                     />
-                  )}
-                  <div className="grid flex-1 gap-2 md:grid-cols-[1fr_1fr_5rem]">
-                    <label className="text-muted-foreground text-xs">
-                      Category
-                      <input
-                        className={inputClassName}
-                        value={award.category}
-                        onChange={(e) => setField(index, 'category', e.target.value)}
-                      />
-                    </label>
-                    <label className="text-muted-foreground text-xs">
-                      Winner
-                      <input
-                        className={inputClassName}
-                        value={award.winner}
-                        onChange={(e) => setField(index, 'winner', e.target.value)}
-                      />
-                    </label>
-                    <label className="text-muted-foreground text-xs">
-                      Slide
-                      <input
-                        type="number"
-                        min={1}
-                        max={deck?.numPages}
-                        className={inputClassName}
-                        value={award.slide}
-                        onChange={(e) => setField(index, 'slide', Number(e.target.value) || 1)}
-                      />
-                    </label>
+                  </label>
+                  {sections.length > 1 && (
                     <button
                       type="button"
-                      onClick={() => {
-                        const [lead, reveal] = announcementParts(settings, award);
-                        void (settings.suspense && lead
-                          ? hear(`award-${index}`, [lead, reveal], 'en', settings.suspense_seconds)
-                          : hear(`award-${index}`, announcementFor(settings, award)));
-                      }}
-                      disabled={!award.script || speaking !== null}
-                      className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs md:col-span-3"
+                      aria-label={`Remove section ${deck.name || sectionIndex + 1}`}
+                      onClick={() => void removeSection(deck)}
+                      className="text-muted-foreground hover:text-destructive mb-1"
                     >
-                      {speaking === `award-${index}` ? (
-                        <CircleNotchIcon className="size-3.5 animate-spin" />
-                      ) : (
-                        <SpeakerHighIcon className="size-3.5" />
-                      )}
-                      Hear how Tina will say it
+                      <TrashIcon className="size-5" />
                     </button>
-                    {awards.findIndex(
-                      (a) => categoryKey(a.category) === categoryKey(award.category)
-                    ) === index && (
-                      <div className="md:col-span-3">
+                  )}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <label
+                    className={`border-input hover:bg-accent cursor-pointer rounded-full border px-4 py-2 text-sm font-medium ${
+                      isBusy ? 'pointer-events-none opacity-50' : ''
+                    }`}
+                  >
+                    {deck.doc ? 'Replace PDF' : 'Upload slides (PDF)'}
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      className="hidden"
+                      disabled={isBusy}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (file) {
+                          void handleFile(file, deck.id);
+                        }
+                      }}
+                    />
+                  </label>
+                  {deck.doc ? (
+                    <span className="text-muted-foreground text-sm">
+                      {deck.doc.numPages} slides
+                    </span>
+                  ) : (
+                    entries.length > 0 && (
+                      <span role="alert" className="text-sm text-amber-600">
+                        Upload this section&rsquo;s PDF: its slides are shown while announcing.
+                      </span>
+                    )
+                  )}
+                  {deck.doc && !isBusy && (
+                    <Button variant="ghost" size="sm" onClick={() => reread(deck)}>
+                      Re-read awards from slides
+                    </Button>
+                  )}
+                </div>
+                {busy && status && (
+                  <p className="text-muted-foreground mt-2 flex items-center gap-2 text-sm">
+                    <CircleNotchIcon weight="bold" className="size-4 animate-spin" /> {status}
+                  </p>
+                )}
+
+                <h3 className="mt-4 text-sm font-semibold">Announcements ({entries.length})</h3>
+                <ol className="mt-2 flex flex-col gap-3">
+                  {entries.map(({ award, index }) => (
+                    <li
+                      key={index}
+                      className="flex flex-col gap-3 rounded-lg border p-3 md:flex-row"
+                    >
+                      {thumbnails[deck.id]?.[award.slide - 1] && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={thumbnails[deck.id][award.slide - 1]}
+                          alt={`Slide ${award.slide}`}
+                          className="h-fit w-full rounded border md:w-40"
+                        />
+                      )}
+                      <div className="grid flex-1 gap-2 md:grid-cols-[1fr_1fr_5rem]">
                         <label className="text-muted-foreground text-xs">
-                          Introduction (optional): said once before this award&rsquo;s winners, with
-                          Tina on screen, e.g. what the award recognises
-                          <textarea
-                            rows={2}
+                          Category
+                          <input
                             className={inputClassName}
-                            value={award.intro ?? ''}
-                            placeholder="e.g. We now present the Associate of the Year Award, which recognises outstanding contribution, commitment, and impact."
-                            onChange={(e) => setField(index, 'intro', e.target.value || undefined)}
+                            value={award.category}
+                            onChange={(e) => setField(index, 'category', e.target.value)}
                           />
                         </label>
-                        {award.intro && placeholderIn(award.intro) && (
-                          <p role="alert" className="text-xs text-amber-600">
-                            Fill in {placeholderIn(award.intro)} before the event: Tina would read
-                            it out as written.
-                          </p>
-                        )}
-                        {award.intro && (
-                          <button
-                            type="button"
-                            onClick={() => void hear(`intro-${index}`, award.intro ?? '')}
-                            disabled={speaking !== null}
-                            className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs"
-                          >
-                            {speaking === `intro-${index}` ? (
-                              <CircleNotchIcon className="size-3.5 animate-spin" />
-                            ) : (
-                              <SpeakerHighIcon className="size-3.5" />
+                        <label className="text-muted-foreground text-xs">
+                          Winner
+                          <input
+                            className={inputClassName}
+                            value={award.winner}
+                            onChange={(e) => setField(index, 'winner', e.target.value)}
+                          />
+                        </label>
+                        <label className="text-muted-foreground text-xs">
+                          Slide
+                          <input
+                            type="number"
+                            min={1}
+                            max={deck.doc?.numPages}
+                            className={inputClassName}
+                            value={award.slide}
+                            onChange={(e) => setField(index, 'slide', Number(e.target.value) || 1)}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const [lead, reveal] = announcementParts(settings, award);
+                            void (settings.suspense && lead
+                              ? hear(
+                                  `award-${index}`,
+                                  [lead, reveal],
+                                  'en',
+                                  settings.suspense_seconds
+                                )
+                              : hear(`award-${index}`, announcementFor(settings, award)));
+                          }}
+                          disabled={!award.script || speaking !== null}
+                          className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs md:col-span-3"
+                        >
+                          {speaking === `award-${index}` ? (
+                            <CircleNotchIcon className="size-3.5 animate-spin" />
+                          ) : (
+                            <SpeakerHighIcon className="size-3.5" />
+                          )}
+                          Hear how Tina will say it
+                        </button>
+                        {awards.findIndex(
+                          (a) => categoryKey(a.category) === categoryKey(award.category)
+                        ) === index && (
+                          <div className="md:col-span-3">
+                            <label className="text-muted-foreground text-xs">
+                              Introduction (optional): said once before this award&rsquo;s winners,
+                              with Tina on screen, e.g. what the award recognises
+                              <textarea
+                                rows={2}
+                                className={inputClassName}
+                                value={award.intro ?? ''}
+                                placeholder="e.g. We now present the Associate of the Year Award, which recognises outstanding contribution, commitment, and impact."
+                                onChange={(e) =>
+                                  setField(index, 'intro', e.target.value || undefined)
+                                }
+                              />
+                            </label>
+                            {award.intro && placeholderIn(award.intro) && (
+                              <p role="alert" className="text-xs text-amber-600">
+                                Fill in {placeholderIn(award.intro)} before the event: Tina would
+                                read it out as written.
+                              </p>
                             )}
-                            Hear the introduction
-                          </button>
+                            {award.intro && (
+                              <button
+                                type="button"
+                                onClick={() => void hear(`intro-${index}`, award.intro ?? '')}
+                                disabled={speaking !== null}
+                                className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs"
+                              >
+                                {speaking === `intro-${index}` ? (
+                                  <CircleNotchIcon className="size-3.5 animate-spin" />
+                                ) : (
+                                  <SpeakerHighIcon className="size-3.5" />
+                                )}
+                                Hear the introduction
+                              </button>
+                            )}
+                          </div>
                         )}
+                        <label className="text-muted-foreground text-xs md:col-span-3">
+                          Announcement text (read word-for-word)
+                          <textarea
+                            rows={3}
+                            className={inputClassName}
+                            value={award.script}
+                            onChange={(e) => setField(index, 'script', e.target.value)}
+                          />
+                        </label>
+                        <div className="text-muted-foreground text-xs md:col-span-3">
+                          Music URL (optional, an .mp3 link): plays for {settings.walkup_seconds}{' '}
+                          seconds after &ldquo;
+                          {congratulationsFor(settings, award.winner) || 'the announcement'}
+                          &rdquo;
+                          <MusicLink
+                            value={award.music ?? ''}
+                            onChange={(music) => setField(index, 'music', music || undefined)}
+                            settings={settings}
+                            emptyLabel="General walk-up music"
+                            audioOnly
+                          />
+                        </div>
                       </div>
-                    )}
-                    <label className="text-muted-foreground text-xs md:col-span-3">
-                      Announcement text (read word-for-word)
-                      <textarea
-                        rows={3}
-                        className={inputClassName}
-                        value={award.script}
-                        onChange={(e) => setField(index, 'script', e.target.value)}
-                      />
-                    </label>
-                    <div className="text-muted-foreground text-xs md:col-span-3">
-                      Music URL (optional, an .mp3 link): plays for {settings.walkup_seconds}{' '}
-                      seconds after &ldquo;
-                      {congratulationsFor(settings, award.winner) || 'the announcement'}
-                      &rdquo;
-                      <MusicLink
-                        value={award.music ?? ''}
-                        onChange={(music) => setField(index, 'music', music || undefined)}
-                        settings={settings}
-                        emptyLabel="General walk-up music"
-                        audioOnly
-                      />
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${award.category || 'award'}`}
-                    onClick={() => update(awards.filter((_, i) => i !== index))}
-                    className="text-muted-foreground hover:text-destructive self-start"
-                  >
-                    <TrashIcon className="size-5" />
-                  </button>
-                </li>
-              ))}
-            </ol>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-3"
-              onClick={() =>
-                update([...awards, { category: '', winner: '', script: '', slide: 1 }])
-              }
-            >
-              <PlusIcon /> Add award
-            </Button>
-          </section>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${award.category || 'award'}`}
+                        onClick={() => update(awards.filter((_, i) => i !== index))}
+                        className="text-muted-foreground hover:text-destructive self-start"
+                      >
+                        <TrashIcon className="size-5" />
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() =>
+                    update([
+                      ...awards,
+                      { category: '', winner: '', script: '', slide: 1, section: deck.id },
+                    ])
+                  }
+                >
+                  <PlusIcon /> Add award{sections.length > 1 && deck.name ? ` to ${deck.name}` : ''}
+                </Button>
+              </section>
+            );
+          })}
+          <Button variant="outline" className="mt-4 w-full border-dashed" onClick={addSection}>
+            <PlusIcon /> Add section (e.g. Cultural Awards, Service Awards)
+          </Button>
         </>
       )}
 
@@ -1449,7 +1620,12 @@ export function CeremonySetup({
       )}
 
       {tab === 'host' && (
-        <HostPanel settings={settings} awards={awards} onOpenRemote={() => void remote.open()} />
+        <HostPanel
+          settings={settings}
+          awards={awards}
+          sections={sections}
+          onOpenRemote={() => void remote.open()}
+        />
       )}
 
       {tab === 'launch' && (
@@ -1500,12 +1676,14 @@ export function CeremonySetup({
             <ul className="mt-2 flex flex-col gap-1 text-sm">
               {[
                 { ok: settings.events.length > 0, text: `${settings.events.length} events` },
+                ...decks.map((d, i) => ({
+                  ok: Boolean(d.doc) || !missingPdf.includes(d),
+                  text: `${d.name || `Section ${i + 1}`}: ${
+                    d.doc ? `${d.doc.numPages} slides` : 'no PDF yet'
+                  }, ${awards.filter((a) => sectionOf(a, sections).id === d.id).length} awards`,
+                })),
                 {
-                  ok: Boolean(deck),
-                  text: deck ? `Deck loaded (${deck.numPages} slides)` : 'No deck loaded',
-                },
-                {
-                  ok: awards.length > 0 && awards.every((a) => a.category && a.script),
+                  ok: awards.length > 0 && awardsOk,
                   text: `${awards.length} announcements, each with a category and text`,
                 },
                 {
@@ -1540,7 +1718,8 @@ export function CeremonySetup({
               </Button>
               {!ready && (
                 <p className="text-muted-foreground text-xs">
-                  Upload the deck and make sure every award has a category and announcement text.
+                  Upload each award section&rsquo;s PDF and make sure every award has a category and
+                  announcement text.
                 </p>
               )}
             </div>
@@ -1548,7 +1727,7 @@ export function CeremonySetup({
         </>
       )}
       <FloatingRemote win={remote.win}>
-        <HostPanel settings={settings} awards={awards} compact />
+        <HostPanel settings={settings} awards={awards} sections={sections} compact />
       </FloatingRemote>
     </div>
   );

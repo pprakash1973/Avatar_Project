@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ConnectionQuality, DisconnectReason, RoomEvent } from 'livekit-client';
 import {
   VideoTrack,
@@ -17,6 +17,7 @@ import {
 } from '@phosphor-icons/react/dist/ssr';
 import { APPLAUSE_MS, ApplauseCrowd } from '@/components/ceremony/applause-crowd';
 import { HologramReveal, PreRevealOrb } from '@/components/ceremony/hologram-reveal';
+import { LuckyDraw } from '@/components/ceremony/lucky-draw';
 import { MusicCard } from '@/components/ceremony/music-card';
 import {
   type StageVideo,
@@ -33,7 +34,10 @@ import {
   CEREMONY_EVENTS_TOPIC,
   type CeremonySettings,
   SUSPENSE_TRACKS,
+  type SectionDeck,
   loadOvationPhoto,
+  programAwards,
+  slideOffsets,
 } from '@/lib/ceremony';
 import { HOST_CHANNEL, type HostMessage, type HostState, hostLists } from '@/lib/host-channel';
 import { type PDFDocumentProxy, type PageRender, renderPage } from '@/lib/pdf';
@@ -218,8 +222,9 @@ const REVEAL_FAILSAFE_AFTER_VIDEO_MS = 20_000;
 // An event's name stays over Tina this long (e.g. through the lamp lighting).
 const EVENT_TITLE_MS = 2 * 60 * 1000;
 
-/** Red stage curtains over an award's slide; they part when `opening`. */
-function Curtains({ opening }: { opening: boolean }) {
+/** Red stage curtains over an award's slide; they part when `opening`. `label`: a new
+ * award section's name, in gold on the valance. */
+function Curtains({ opening, label }: { opening: boolean; label: string | null }) {
   return (
     <div
       aria-hidden
@@ -228,6 +233,7 @@ function Curtains({ opening }: { opening: boolean }) {
       <div className="curtain curtain-left" />
       <div className="curtain curtain-right" />
       <div className="curtain-valance" />
+      {label && <div className="curtain-label">{label}</div>}
     </div>
   );
 }
@@ -274,19 +280,24 @@ function Countdown({ seconds, startedAt }: { seconds: number; startedAt: number 
 
 const STATE_LABELS: Record<string, string> = {
   listening: 'Listening for “Tina”',
+  muted: 'Tina is muted',
   thinking: 'Tina is thinking…',
   speaking: 'Tina is speaking',
 };
 
+// The finished lucky number stays up this long before Tina returns to the middle.
+const DRAW_HOLD_MS = 2 * 60 * 1000;
+
 interface CeremonyStageProps {
-  deck: PDFDocumentProxy;
+  /** The award sections' PDFs, in order; Tina numbers their slides one after another. */
+  decks: SectionDeck<PDFDocumentProxy>[];
   awards: Award[];
   settings: CeremonySettings;
   onReconnect: () => void;
   onEnd: () => void;
 }
 
-export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: CeremonyStageProps) {
+export function CeremonyStage({ decks, awards, settings, onReconnect, onEnd }: CeremonyStageProps) {
   const { room, isConnected, connectionState } = useSessionContext();
   const agent = useAgent();
   const { videoTrack } = useVoiceAssistant();
@@ -296,7 +307,8 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   // 'slide': the slide fills the screen and Tina moves to the corner.
   // 'video': Tina large in the middle, a YouTube video in a small corner window
   // (E enlarges it to fill the screen, Tina then in the corner).
-  const [view, setView] = useState<'tina' | 'slide' | 'video'>('tina');
+  // 'draw': the lucky draw fills the screen, Tina in the corner.
+  const [view, setView] = useState<'tina' | 'slide' | 'video' | 'draw'>('tina');
   const viewRef = useRef(view);
   viewRef.current = view;
   // Search results for the video on screen; N plays the next one.
@@ -308,14 +320,33 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   const [hiddenTitle, setHiddenTitle] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<{ seconds: number; startedAt: number } | null>(null);
   const [revealedAt, setRevealedAt] = useState(0);
-  // Each award's slide opens with stage curtains (further winners on it don't).
+  // Each award's slide opens with stage curtains (further winners on it don't); the
+  // first of a new award section shows the section's name on them.
   const [curtain, setCurtain] = useState<'closed' | 'opening' | null>(null);
+  const [curtainLabel, setCurtainLabel] = useState<string | null>(null);
+  const shownSection = useRef('');
+  // The host's mute key: Tina neither hears nor speaks (re-applied after a reconnect).
+  const [muted, setMuted] = useState(false);
+  const muteWanted = useRef(false);
+  // The lucky draw on screen: its digits fall in as Tina calls them.
+  const [draw, setDraw] = useState<{
+    id: number;
+    seconds: number;
+    startedAt: number;
+    digits: number;
+    shown: string[];
+    from?: number;
+    to?: number;
+    round?: number;
+    rounds?: number;
+  } | null>(null);
   // What's done (from Tina), for the host's panel.
   const [progress, setProgress] = useState<{
     eventsDone: string[];
     awardsDone: Record<string, number>;
     askAi: boolean;
-  }>({ eventsDone: [], awardsDone: {}, askAi: false });
+    luckyNumbers: number[];
+  }>({ eventsDone: [], awardsDone: {}, askAi: false, luckyNumbers: [] });
   // Tina's entrance: hidden behind a glowing orb until it starts, then she materializes
   // as a hologram for `ms`.
   const [entrance, setEntrance] = useState<{
@@ -329,8 +360,9 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
     at: number;
     sticky?: boolean;
   } | null>(null);
-  // The slide the curtains last opened on: further winners on it (a team) don't get them.
-  const curtainSlide = useRef(0);
+  // The slide and award the curtains last opened on: further winners on it (a team)
+  // don't get them; every other award does (also one sharing a slide number).
+  const curtainFor = useRef('');
   // The award title was just typed above Tina (its introduction): not typed again.
   const [titleTyped, setTitleTyped] = useState(false);
   const eventName = useRef('');
@@ -364,8 +396,21 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   }, []);
   const celebrateRef = useRef(settings.celebrate);
   celebrateRef.current = settings.celebrate;
-  const programRef = useRef({ awards, settings });
-  programRef.current = { awards, settings };
+  // Slides are numbered across the sections' PDFs, in order.
+  const { offsets, total: totalSlides } = slideOffsets(decks);
+  const locate = (n: number) => {
+    for (const d of decks) {
+      const first = offsets[d.id];
+      if (d.doc && n > first && n <= first + d.doc.numPages) {
+        return { doc: d.doc, page: n - first };
+      }
+    }
+    return null;
+  };
+  // The awards as Tina gets them: section names, slides numbered across the PDFs.
+  const program = useMemo(() => programAwards(awards, decks), [awards, decks]);
+  const programRef = useRef({ awards: program, settings });
+  programRef.current = { awards: program, settings };
 
   useScreenWakeLock();
   useClientLog(room);
@@ -435,8 +480,8 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   }, [hiddenTitle, reveal]);
 
   const goTo = useCallback(
-    (n: number) => setSlide(Math.min(Math.max(1, n), deck.numPages)),
-    [deck.numPages]
+    (n: number) => setSlide(Math.min(Math.max(1, n), Math.max(1, totalSlides))),
+    [totalSlides]
   );
 
   const showSlide = useCallback(
@@ -475,6 +520,16 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
     }
   }, [entrance, videoTrack]);
 
+  // The finished lucky number stays up a while, then Tina returns to the middle.
+  const drawComplete = draw !== null && draw.shown.length >= draw.digits;
+  useEffect(() => {
+    if (view !== 'draw' || !drawComplete) {
+      return;
+    }
+    const timer = setTimeout(() => setView('tina'), DRAW_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [view, drawComplete]);
+
   useEffect(() => {
     if (!eventTitle || eventTitle.sticky) {
       return;
@@ -502,6 +557,14 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           });
         } else if (status.type === 'ceremony_live') {
           setIsLive(true);
+          // A new Tina after a reconnect starts unmuted: mute her again if the host had.
+          if (muteWanted.current) {
+            void room.localParticipant
+              .sendText(JSON.stringify({ type: 'command', action: 'mute', name: '' }), {
+                topic: CEREMONY_EVENTS_TOPIC,
+              })
+              .catch(() => {});
+          }
         } else if (status.type === 'progress') {
           // What's done, for the host's panel.
           setProgress({
@@ -511,6 +574,54 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
                 ? status.awards_done
                 : {},
             askAi: Boolean(status.ask_ai),
+            luckyNumbers: Array.isArray(status.lucky_numbers) ? status.lucky_numbers : [],
+          });
+          setMuted(Boolean(status.muted));
+        } else if (status.type === 'mute') {
+          setMuted(Boolean(status.on));
+        } else if (status.type === 'lucky_draw') {
+          // The jar spins to suspense music; the digits follow one by one.
+          if (viewRef.current === 'video') {
+            endVideo();
+          }
+          const seconds = Number(status.seconds) || 30;
+          setDraw({
+            id: Number(status.id),
+            seconds,
+            startedAt: Date.now(),
+            digits: Number(status.digits) || 4,
+            shown: [],
+            from: typeof status.from === 'number' ? status.from : undefined,
+            to: typeof status.to === 'number' ? status.to : undefined,
+            round: Number(status.round) || undefined,
+            rounds: Number(status.rounds) || undefined,
+          });
+          setView('draw');
+          musicRef.current.playCountdown(seconds);
+        } else if (status.type === 'lucky_digit') {
+          if (Number(status.index) === 0) {
+            // The jar has stopped: the suspense music's hit rings, then fades.
+            musicRef.current.endCountdown(COUNTDOWN_MUSIC_TAIL_MS);
+          }
+          setDraw((d) => {
+            if (!d || d.id !== Number(status.id)) {
+              return d;
+            }
+            const shown = [...d.shown];
+            shown[Number(status.index) || 0] = String(status.digit ?? '');
+            return { ...d, shown };
+          });
+        } else if (status.type === 'lucky_draw_cancel') {
+          // Muted, or the host moved on, before the number came out.
+          setDraw((d) => {
+            if (d && d.id === Number(status.id)) {
+              musicRef.current.endCountdown(0);
+              if (viewRef.current === 'draw') {
+                setView('tina');
+              }
+              return null;
+            }
+            return d;
           });
         } else if (status.type === 'intro_reveal') {
           setEntrance({ phase: 'playing', ms: (Number(status.seconds) || 10) * 1000 });
@@ -520,6 +631,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
             endVideo();
           }
           musicRef.current.stop();
+          setDraw(null);
           eventName.current = String(status.name || '');
           setEventTitle({
             name: eventName.current,
@@ -545,6 +657,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           }
           musicRef.current.stop();
           setHiddenTitle(null);
+          setDraw(null);
           setView('tina');
           setEventTitle({ name: 'Thank you!', at: Date.now(), sticky: true });
         } else if (status.type === 'slide') {
@@ -553,14 +666,21 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
             setTitleTyped(eventName.current === String(status.title));
             eventName.current = '';
           }
+          setDraw(null);
           showSlide(Number(status.slide) || 1);
-          // Award slides carry their category; each new one opens with curtains, on
-          // the winner's name (or shortly, without the suspense reveal).
-          if (status.title && Number(status.slide) !== curtainSlide.current) {
-            curtainSlide.current = Number(status.slide);
+          // Award slides carry their category; each new award opens with curtains, on
+          // the winner's name (or shortly, without the suspense reveal). The first of
+          // a new award section shows its name on them, and stays closed a little longer.
+          const key = `${Number(status.slide)}|${String(status.title || '')}`;
+          if (status.title && key !== curtainFor.current) {
+            curtainFor.current = key;
+            const section = String(status.section || '');
+            const newSection = section !== '' && section !== shownSection.current;
+            shownSection.current = section;
+            setCurtainLabel(newSection ? section : null);
             setCurtain('closed');
             if (!status.hidden) {
-              setTimeout(openCurtain, CURTAIN_CLOSED_MS);
+              setTimeout(openCurtain, CURTAIN_CLOSED_MS * (newSection ? 2 : 1));
             }
           }
           if (status.hidden) {
@@ -597,6 +717,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           reveal();
         } else if (status.type === 'video' && Array.isArray(status.videos)) {
           musicRef.current.stop();
+          setDraw(null);
           setVideos(status.videos as StageVideo[]);
           setVideoIndex(Number(status.index) || 0);
           setView('video');
@@ -673,16 +794,18 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
     live: tinaLive,
     connection: connectionState,
     agentState: agent.state,
-    now: view === 'tina' ? (eventTitle?.name ?? null) : hiddenTitle || null,
+    now: view === 'tina' || view === 'draw' ? (eventTitle?.name ?? null) : hiddenTitle || null,
     music: music.playing ? (music.song ?? 'Walk-up music') : null,
     onHold,
+    muted,
     askAi: progress.askAi,
-    ...hostLists(settings, awards),
+    ...hostLists(settings, awards, decks),
     eventsDone: progress.eventsDone,
     awardsDone: progress.awardsDone,
+    luckyNumbers: progress.luckyNumbers,
   };
   // Settings saved again during the ceremony (on the settings page): Tina gets them too.
-  const programKey = JSON.stringify({ awards, settings });
+  const programKey = JSON.stringify({ awards: program, settings });
   const sentProgram = useRef(programKey);
   useEffect(() => {
     if (!isLive || programKey === sentProgram.current) {
@@ -718,6 +841,9 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         if (action === 'stop_music') {
           musicRef.current.stop();
           return;
+        }
+        if (action === 'mute' || action === 'unmute') {
+          muteWanted.current = action === 'mute';
         }
         void room.localParticipant
           .sendText(JSON.stringify({ type: 'command', action, name: name ?? '' }), {
@@ -797,7 +923,7 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
   }, [slide, showSlide, view, endVideo, nextVideo, reveal]);
 
   // Tina fills the middle unless a slide (or an enlarged video) takes the screen.
-  const tinaInCorner = view === 'slide' || (view === 'video' && videoLarge);
+  const tinaInCorner = view === 'slide' || view === 'draw' || (view === 'video' && videoLarge);
   // Videos and music cards go in a corner Tina isn't using.
   const mediaCorner =
     tinaInCorner && CORNERS[corner].includes('right') ? 'left-3 bottom-16' : 'right-3 bottom-3';
@@ -808,7 +934,9 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
       : 'Connecting…'
     : !tinaLive
       ? 'Tina is getting ready…'
-      : (STATE_LABELS[agent.state] ?? 'Tina is ready');
+      : muted
+        ? STATE_LABELS.muted
+        : (STATE_LABELS[agent.state] ?? 'Tina is ready');
 
   return (
     <div className="fixed inset-0 z-40 overflow-hidden bg-black">
@@ -832,9 +960,12 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
           key={revealedAt}
           className={`size-full ${hiddenTitle !== null ? 'slide-hidden' : revealedAt ? 'slide-reveal' : ''}`}
         >
-          <SlideCanvas deck={deck} slide={slide} redraw={slideRedraw} />
+          {(() => {
+            const at = locate(slide);
+            return at ? <SlideCanvas deck={at.doc} slide={at.page} redraw={slideRedraw} /> : null;
+          })()}
         </div>
-        {curtain && <Curtains opening={curtain === 'opening'} />}
+        {curtain && <Curtains opening={curtain === 'opening'} label={curtainLabel} />}
         {hiddenTitle !== null && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 text-center">
             <p className="max-w-[80vw] text-[6vh] font-semibold text-white drop-shadow-lg">
@@ -863,7 +994,20 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
         />
       )}
 
-      {view === 'tina' && eventTitle?.name && (
+      {view === 'draw' && draw && (
+        <LuckyDraw
+          key={draw.id}
+          seconds={draw.seconds}
+          startedAt={draw.startedAt}
+          digits={draw.digits}
+          shown={draw.shown}
+          from={draw.from}
+          to={draw.to}
+          round={draw.round}
+          rounds={draw.rounds}
+        />
+      )}
+      {(view === 'tina' || view === 'draw') && eventTitle?.name && (
         <p className="absolute inset-x-0 top-[3vh] z-10 px-[5vw] text-center text-[5vh] leading-tight font-semibold drop-shadow-lg">
           <TypedTitle key={eventTitle.at} text={eventTitle.name} />
         </p>
@@ -911,10 +1055,12 @@ export function CeremonyStage({ deck, awards, settings, onReconnect, onEnd }: Ce
       <div className="absolute top-3 left-3 rounded-full bg-black/60 px-3 py-1 text-xs text-white/90">
         {statusText} ·{' '}
         {view === 'slide'
-          ? `Slide ${slide}/${deck.numPages} (L: reload)`
+          ? `Slide ${slide}/${totalSlides} (L: reload)`
           : view === 'video'
             ? `Video (E: ${videoLarge ? 'smaller' : 'enlarge'} · V: stop)`
-            : 'Tina view (S: slide)'}
+            : view === 'draw'
+              ? 'Lucky draw (T: Tina)'
+              : 'Tina view (S: slide)'}
         {onHold && ' · On hold (say “continue”)'}
         {music.playing && ` · ${music.song ? `♪ ${music.song}` : 'Music'} (M: stop)`}
       </div>

@@ -728,12 +728,21 @@ async def run_ceremony(
         "ceremony with %d awards, %d events", len(program.awards), len(program.events)
     )
 
-    async def send_slide(slide: int, hidden: bool = False, title: str = "") -> None:
-        # hidden: blur the slide until the winner's name is revealed.
+    async def send_slide(
+        slide: int, hidden: bool = False, title: str = "", section: str = ""
+    ) -> None:
+        # hidden: blur the slide until the winner's name is revealed. title: the
+        # award's category; section: its award section (each opens with curtains).
         await send_ui(
             ctx.room,
             UI_STATUS_TOPIC,
-            {"type": "slide", "slide": slide, "hidden": hidden, "title": title},
+            {
+                "type": "slide",
+                "slide": slide,
+                "hidden": hidden,
+                "title": title,
+                "section": section,
+            },
         )
 
     async def send_view(view: str) -> None:

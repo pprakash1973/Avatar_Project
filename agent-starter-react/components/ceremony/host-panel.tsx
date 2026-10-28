@@ -1,10 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowSquareOutIcon,
   CheckCircleIcon,
   CircleNotchIcon,
+  MicrophoneIcon,
+  MicrophoneSlashIcon,
   PauseIcon,
   PlayIcon,
   SpeakerSimpleSlashIcon,
@@ -12,10 +14,11 @@ import {
   WarningIcon,
 } from '@phosphor-icons/react/dist/ssr';
 import { Button } from '@/components/ui/button';
-import type { Award, CeremonySettings } from '@/lib/ceremony';
+import type { Award, AwardSection, CeremonySettings } from '@/lib/ceremony';
 import {
   HOST_CHANNEL,
   type HostAction,
+  type HostEvent,
   type HostMessage,
   type HostState,
   hostLists,
@@ -36,20 +39,96 @@ const AGENT_LABELS: Record<string, string> = {
   initializing: 'Getting ready…',
 };
 
+type PanelTab = 'events' | 'awards' | 'music';
+
+/** What an event is, beside its name on the panel. */
+function eventNote(event: HostEvent) {
+  if (event.kind === 'ask_ai') {
+    return 'Audience Q&A';
+  }
+  if (event.kind === 'lucky_draw') {
+    return 'Lucky draw';
+  }
+  if (event.trigger === 'appear') {
+    return 'Said when Tina appears';
+  }
+  if (event.trigger === 'first_call') {
+    return 'Said on the first “Hello Tina”';
+  }
+  return null;
+}
+
+/** A play button that spins while its click is on its way. */
+function PlayButton({
+  label,
+  sending,
+  disabled,
+  onClick,
+  variant = 'default',
+}: {
+  label: string;
+  sending: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  variant?: 'default' | 'secondary' | 'outline';
+}) {
+  return (
+    <Button
+      size="icon"
+      variant={variant}
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="shrink-0"
+    >
+      {sending ? (
+        <CircleNotchIcon className="size-4 animate-spin" />
+      ) : (
+        <PlayIcon weight="fill" className="size-4" />
+      )}
+    </Button>
+  );
+}
+
+function Card({
+  title,
+  aside,
+  compact,
+  children,
+}: {
+  title: string;
+  aside?: ReactNode;
+  compact: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className={compact ? 'rounded-lg border p-2' : 'rounded-xl border p-4'}>
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold">{title}</h2>
+        {aside && <span className="text-muted-foreground text-xs">{aside}</span>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 /**
- * The host's controls, on the laptop screen (never on the TV): every event and the
- * awards at a click, so the host never has to call Tina twice. Clicks go to Tina
- * through the stage window and are done straight away.
+ * The host's controls, on the laptop screen (never on the TV): every event, the award
+ * sections and the music at a click, so the host never has to call Tina twice, and the
+ * mute key for the noisy parts of the programme. Clicks go to Tina through the stage
+ * window and are done straight away.
  */
 export function HostPanel({
   settings,
   awards: awardList,
+  sections: sectionList,
   compact = false,
   onOpenRemote,
 }: {
   settings: CeremonySettings;
   awards: Award[];
-  /** The floating remote: a narrow layout without the explanations. */
+  sections: AwardSection[];
+  /** The floating remote: a narrow layout with tabs, without the explanations. */
   compact?: boolean;
   /** Opens the floating remote (shown on the full panel when supported). */
   onOpenRemote?: () => void;
@@ -61,6 +140,7 @@ export function HostPanel({
   // Exit the awards takes a second tap within a few seconds (no dialog: the remote is
   // a floating window, and a dialog would open on the settings page behind it).
   const [exitArmedAt, setExitArmedAt] = useState(0);
+  const [tab, setTab] = useState<PanelTab>('events');
   const channel = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
@@ -95,61 +175,59 @@ export function HostPanel({
   const view = stageOpen
     ? state
     : {
-        ...hostLists(settings, awardList),
+        ...hostLists(settings, awardList, sectionList),
         eventsDone: [] as string[],
         awardsDone: {} as Record<string, number>,
+        luckyNumbers: [] as number[],
         askAi: false,
         onHold: false,
+        muted: false,
         music: null as string | null,
         now: null as string | null,
       };
-  const winners = view.awards.reduce((n, a) => n + a.winners, 0);
-  const announced = view.awards.reduce(
-    (n, a) => n + Math.min(a.winners, view.awardsDone[a.category] ?? 0),
-    0
-  );
-  const nextAward = view.awards.find((a) => (view.awardsDone[a.category] ?? 0) < a.winners);
+  // Muted, Tina takes no events or awards (the music still plays).
+  const canAct = ready && !view.muted;
+  const done = (category: string, winners: number) =>
+    Math.min(winners, view.awardsDone[category] ?? 0);
+  const allAwards = view.sections.flatMap((s) => s.awards.map((a) => ({ ...a, section: s.name })));
+  const winners = allAwards.reduce((n, a) => n + a.winners, 0);
+  const announced = allAwards.reduce((n, a) => n + done(a.category, a.winners), 0);
+  const nextAward = allAwards.find((a) => done(a.category, a.winners) < a.winners);
   const exitArmed = now - exitArmedAt < EXIT_CONFIRM_MS;
+  const eventsDone = view.events.filter((e) => view.eventsDone.includes(e.name)).length;
 
-  return (
-    <div className={compact ? 'flex flex-col gap-2 p-2' : 'mt-6 flex flex-col gap-4'}>
-      {!compact && (
-        <div className="flex flex-wrap items-start gap-3">
-          <p className="text-muted-foreground flex-1 text-xs">
-            A click here makes Tina act at once, no need to call her. Keep this page on the laptop
-            screen; only the stage window goes on the TV (Windows: Win+P → Extend). Saving the
-            settings updates this list and Tina.
-          </p>
-          {onOpenRemote && (
-            <Button variant="outline" size="sm" onClick={onOpenRemote}>
-              <ArrowSquareOutIcon className="size-4" /> Open floating remote
+  const status = (
+    <div
+      role="status"
+      className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border p-3 text-sm ${
+        view.muted
+          ? 'border-red-500/70 bg-red-500/10'
+          : ready
+            ? ''
+            : 'border-amber-500/60 bg-amber-500/10'
+      }`}
+    >
+      {!stageOpen ? (
+        <>
+          <WarningIcon className="size-5 text-amber-600" />
+          <span className="flex-1">The stage isn&rsquo;t open yet.</span>
+          {!compact && (
+            <Button size="sm" onClick={openStageWindow}>
+              Open the stage window
             </Button>
           )}
-        </div>
-      )}
-
-      <div
-        role="status"
-        className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border p-3 text-sm ${
-          ready ? '' : 'border-amber-500/60 bg-amber-500/10'
-        }`}
-      >
-        {!stageOpen ? (
-          <>
-            <WarningIcon className="size-5 text-amber-600" />
-            <span className="flex-1">The stage isn&rsquo;t open yet.</span>
-            {!compact && (
-              <Button size="sm" onClick={openStageWindow}>
-                Open the stage window
-              </Button>
-            )}
-          </>
-        ) : !state.live ? (
-          <>
-            <CircleNotchIcon className="size-5 animate-spin" /> Tina is getting ready…
-          </>
-        ) : (
-          <>
+        </>
+      ) : !ready ? (
+        <span className="flex flex-1 items-center gap-2">
+          <CircleNotchIcon className="size-5 animate-spin" /> Tina is getting ready…
+        </span>
+      ) : (
+        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
+          {view.muted ? (
+            <span className="font-semibold text-red-600">
+              Tina is muted: she can&rsquo;t hear or speak
+            </span>
+          ) : (
             <span className="flex items-center gap-2 font-medium">
               <span
                 className={`size-2.5 rounded-full ${
@@ -158,225 +236,345 @@ export function HostPanel({
               />
               Tina: {AGENT_LABELS[state.agentState] ?? state.agentState}
             </span>
-            {state.now && <span className="text-muted-foreground">Now: {state.now}</span>}
-            {state.onHold && <span className="font-medium text-amber-600">Paused</span>}
-            {state.askAi && <span className="text-muted-foreground">Ask AI on</span>}
-            {state.music && <span className="text-muted-foreground">♪ {state.music}</span>}
+          )}
+          {state.now && <span className="text-muted-foreground">Now: {state.now}</span>}
+          {state.onHold && <span className="font-medium text-amber-600">Paused</span>}
+          {state.askAi && <span className="text-muted-foreground">Ask AI on</span>}
+          {state.music && <span className="text-muted-foreground">♪ {state.music}</span>}
+        </span>
+      )}
+      <Button
+        size={compact ? 'sm' : 'default'}
+        variant={view.muted ? 'destructive' : 'outline'}
+        disabled={!ready}
+        aria-pressed={view.muted}
+        onClick={() => send(view.muted ? 'unmute' : 'mute')}
+        className="shrink-0"
+      >
+        {view.muted ? (
+          <>
+            <MicrophoneSlashIcon weight="fill" className="size-5" /> Muted: tap to unmute
+          </>
+        ) : (
+          <>
+            <MicrophoneIcon weight="fill" className="size-5" /> Mute Tina
           </>
         )}
-      </div>
+      </Button>
+    </div>
+  );
 
-      <section className={compact ? 'rounded-lg border p-2' : 'rounded-xl border p-4'}>
-        <div className="flex items-baseline justify-between gap-2">
-          <h2 className="text-sm font-semibold">Awards</h2>
-          <span className="text-muted-foreground text-xs">
-            {announced} of {winners} winners announced
-          </span>
-        </div>
-        <div className="mt-3 grid grid-cols-2 gap-2">
-          <Button
-            size="lg"
-            className="col-span-2 h-auto justify-start py-3 text-left whitespace-normal"
-            disabled={!ready || !nextAward}
-            onClick={() => send('next_award')}
-          >
-            {sending('next_award') ? (
-              <CircleNotchIcon className="size-5 animate-spin" />
-            ) : (
-              <PlayIcon weight="fill" className="size-5" />
-            )}
-            <span>
-              {!nextAward
-                ? winners === 0
-                  ? 'No awards loaded (Awards tab)'
-                  : 'All awards announced'
-                : announced === 0
-                  ? `Start the awards: ${nextAward.category}`
-                  : `Next award: ${nextAward.category}`}
-            </span>
-          </Button>
-          <Button
-            variant="outline"
-            size="lg"
-            disabled={!ready || view.onHold}
-            onClick={() => send('pause')}
-          >
-            <PauseIcon weight="fill" className="size-5" /> Pause
-          </Button>
-          <Button
-            variant="outline"
-            size="lg"
-            disabled={!ready || !view.onHold}
-            onClick={() => send('resume')}
-          >
-            <PlayIcon weight="fill" className="size-5" /> Resume
-          </Button>
-          <Button
-            variant="destructive"
-            size="lg"
-            className="col-span-2"
-            disabled={!ready}
-            onClick={() => {
-              if (exitArmed) {
-                setExitArmedAt(0);
-                send('end_awards');
-              } else {
-                setExitArmedAt(Date.now());
-              }
-            }}
-          >
-            <StopIcon weight="fill" className="size-5" />
-            {exitArmed
-              ? winners - announced > 0
-                ? `Tap again to exit (${winners - announced} not announced)`
-                : 'Tap again to exit the awards'
-              : 'Exit the awards'}
-          </Button>
-        </div>
-        {!compact && (
-          <p className="text-muted-foreground mt-2 text-xs">
-            Pause holds the next winner (Tina finishes the sentence she&rsquo;s saying); Resume
-            carries on.
-          </p>
-        )}
-        {!compact && view.awards.length > 0 && (
-          <details className="mt-3">
-            <summary className="text-muted-foreground cursor-pointer text-xs">
-              All awards ({view.awards.length} categories)
-            </summary>
-            <ul className="mt-2 flex flex-col gap-1">
-              {view.awards.map((a) => {
-                const done = Math.min(a.winners, view.awardsDone[a.category] ?? 0);
-                return (
-                  <li key={a.category} className="flex items-center gap-2 text-sm">
-                    <button
-                      type="button"
-                      aria-label={`Announce ${a.category}`}
-                      disabled={!ready}
-                      onClick={() => send('award', a.category)}
-                      className="hover:bg-accent rounded-full border p-1.5 disabled:opacity-40"
-                    >
-                      {sending('award', a.category) ? (
-                        <CircleNotchIcon className="size-4 animate-spin" />
-                      ) : (
-                        <PlayIcon weight="fill" className="size-4" />
-                      )}
-                    </button>
-                    <span className="flex-1">{a.category}</span>
-                    {done === a.winners ? (
-                      <CheckCircleIcon weight="fill" className="size-4 text-green-600" />
-                    ) : (
-                      <span className="text-muted-foreground text-xs">
-                        {done}/{a.winners}
-                      </span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </details>
-        )}
-      </section>
-
-      <section className={compact ? 'rounded-lg border p-2' : 'rounded-xl border p-4'}>
-        <h2 className="text-sm font-semibold">Events</h2>
-        {view.events.length === 0 && (
-          <p className="text-muted-foreground mt-2 text-xs">No events on the Events tab.</p>
-        )}
-        <ul className="mt-3 flex flex-col gap-2">
-          {view.events.map((event) => {
-            const done = view.eventsDone.includes(event.name);
-            const current = view.now === event.name;
-            return (
-              <li
-                key={event.name}
-                className={`flex items-center gap-3 rounded-lg border p-2 ${
-                  current ? 'border-sky-500 bg-sky-500/10' : ''
-                }`}
-              >
-                <Button
-                  size="icon"
-                  aria-label={`Start ${event.name}`}
-                  disabled={!ready}
+  const events = (
+    <Card title="Events" aside={`${eventsDone} of ${view.events.length} done`} compact={compact}>
+      {view.events.length === 0 && (
+        <p className="text-muted-foreground mt-2 text-xs">No events on the Events tab.</p>
+      )}
+      <ol className="mt-3 flex flex-col gap-2">
+        {view.events.map((event, i) => {
+          const isDone = view.eventsDone.includes(event.name);
+          const current = view.now === event.name;
+          const note = eventNote(event);
+          const lucky = event.kind === 'lucky_draw';
+          const drawn = view.luckyNumbers.length;
+          const draws = event.draws ?? 5;
+          return (
+            <li
+              key={event.name}
+              className={`flex items-center gap-3 rounded-lg border p-2 ${
+                current ? 'border-sky-500 bg-sky-500/10' : ''
+              }`}
+            >
+              {!(lucky && drawn > 0) && (
+                <PlayButton
+                  label={`${lucky ? 'Draw a number' : 'Start'}: ${event.name}`}
+                  sending={sending('event', event.name)}
+                  disabled={!canAct}
                   onClick={() => send('event', event.name)}
+                />
+              )}
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">
+                  <span className="text-muted-foreground mr-1.5 font-normal">{i + 1}.</span>
+                  {event.name}
+                </span>
+                {note && <span className="text-muted-foreground block text-xs">{note}</span>}
+                {lucky && (
+                  <span className="block text-xs font-medium text-amber-600">
+                    {drawn === 0
+                      ? `${draws} draws planned`
+                      : `Drawn ${drawn} of ${draws}: ${view.luckyNumbers.join(', ')}`}
+                  </span>
+                )}
+              </span>
+              {lucky && drawn > 0 && (
+                <Button
+                  size="sm"
+                  variant={drawn >= draws ? 'outline' : 'default'}
+                  disabled={!canAct}
+                  onClick={() => send('event', event.name)}
+                  className="shrink-0"
                 >
                   {sending('event', event.name) ? (
                     <CircleNotchIcon className="size-4 animate-spin" />
                   ) : (
                     <PlayIcon weight="fill" className="size-4" />
                   )}
+                  {drawn >= draws ? 'One more' : `Roll again (${drawn + 1}/${draws})`}
                 </Button>
-                <span className="flex-1 text-sm font-medium">
-                  {event.name}
-                  {event.kind === 'ask_ai' && (
-                    <span className="text-muted-foreground ml-2 text-xs font-normal">
-                      audience Q&amp;A
-                    </span>
-                  )}
-                </span>
-                {current && <span className="text-xs text-sky-600">Now</span>}
-                {done && !current && (
-                  <CheckCircleIcon weight="fill" className="size-5 text-green-600" />
-                )}
-                {event.kind === 'ask_ai' && view.askAi && (
-                  <Button variant="outline" size="sm" onClick={() => send('end_ask_ai')}>
-                    End Ask AI
-                  </Button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </section>
-
-      <section className={compact ? 'rounded-lg border p-2' : 'rounded-xl border p-4'}>
-        <div className="flex items-baseline justify-between gap-2">
-          <h2 className="text-sm font-semibold">Music</h2>
-          {view.music && (
-            <span className="text-muted-foreground text-xs">Playing: {view.music}</span>
-          )}
-        </div>
-        <ul className="mt-3 flex flex-col gap-2">
-          {[
-            ...(view.songs ?? []).map((name) => ({ action: 'song' as const, name, label: name })),
-            {
-              action: 'suspense' as const,
-              name: '',
-              label: 'Suspense music (lucky draw, one minute)',
-            },
-          ].map((track) => (
-            <li key={`${track.action}:${track.name}`} className="flex items-center gap-3">
-              <Button
-                size="icon"
-                variant="secondary"
-                aria-label={`Play ${track.label}`}
-                disabled={!stageOpen}
-                onClick={() => send(track.action, track.name)}
-              >
-                {sending(track.action, track.name) ? (
-                  <CircleNotchIcon className="size-4 animate-spin" />
-                ) : (
-                  <PlayIcon weight="fill" className="size-4" />
-                )}
-              </Button>
-              <span className="flex-1 text-sm">{track.label}</span>
+              )}
+              {current && <span className="text-xs text-sky-600">Now</span>}
+              {isDone && !current && !lucky && (
+                <CheckCircleIcon weight="fill" className="size-5 shrink-0 text-green-600" />
+              )}
+              {event.kind === 'ask_ai' && view.askAi && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!canAct}
+                  onClick={() => send('end_ask_ai')}
+                >
+                  End Ask AI
+                </Button>
+              )}
             </li>
-          ))}
-        </ul>
-        {view.songs.length === 0 && (
-          <p className="text-muted-foreground mt-2 text-xs">
-            Add songs on the Customise tab (Songs for breaks) to play them from here.
-          </p>
-        )}
+          );
+        })}
+      </ol>
+      {!compact && (
+        <p className="text-muted-foreground mt-2 text-xs">
+          Every event is here, also Tina&rsquo;s introduction and the greeting: if the sound failed
+          on stage, start it again from here.
+        </p>
+      )}
+    </Card>
+  );
+
+  const awardsCard = (
+    <Card title="Awards" aside={`${announced} of ${winners} winners announced`} compact={compact}>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Button
+          size="lg"
+          className="col-span-2 h-auto justify-start py-3 text-left whitespace-normal"
+          disabled={!canAct || !nextAward}
+          onClick={() => send('next_award')}
+        >
+          {sending('next_award') ? (
+            <CircleNotchIcon className="size-5 shrink-0 animate-spin" />
+          ) : (
+            <PlayIcon weight="fill" className="size-5 shrink-0" />
+          )}
+          <span>
+            {!nextAward
+              ? winners === 0
+                ? 'No awards loaded (Awards tab)'
+                : 'All awards announced'
+              : `${announced === 0 ? 'Start the awards' : 'Next award'}: ${
+                  nextAward.section ? `${nextAward.section} · ` : ''
+                }${nextAward.category}`}
+          </span>
+        </Button>
         <Button
           variant="outline"
-          className="mt-3 w-full"
-          disabled={!stageOpen || !view.music}
-          onClick={() => send('stop_music')}
+          size="lg"
+          disabled={!canAct || view.onHold}
+          onClick={() => send('pause')}
         >
-          <SpeakerSimpleSlashIcon className="size-5" /> Stop the music
+          <PauseIcon weight="fill" className="size-5" /> Pause
         </Button>
-      </section>
+        <Button
+          variant="outline"
+          size="lg"
+          disabled={!canAct || !view.onHold}
+          onClick={() => send('resume')}
+        >
+          <PlayIcon weight="fill" className="size-5" /> Resume
+        </Button>
+      </div>
+      {!compact && (
+        <p className="text-muted-foreground mt-2 text-xs">
+          Pause holds the next winner (Tina finishes the sentence she&rsquo;s saying); Resume
+          carries on.
+        </p>
+      )}
+      <div className="mt-3 flex flex-col gap-3">
+        {view.sections.map((section, i) => {
+          const total = section.awards.reduce((n, a) => n + a.winners, 0);
+          const sectionDone = section.awards.reduce((n, a) => n + done(a.category, a.winners), 0);
+          const finished = total > 0 && sectionDone === total;
+          return (
+            <div key={`${section.name}-${i}`} className="rounded-lg border">
+              {section.name && (
+                <div className="bg-muted/50 flex items-center gap-2 rounded-t-lg border-b p-2">
+                  <span className="flex-1 text-sm font-semibold">{section.name}</span>
+                  <span className="text-muted-foreground text-xs">
+                    {sectionDone}/{total}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant={finished ? 'outline' : 'secondary'}
+                    disabled={!canAct || total === 0 || finished}
+                    onClick={() => send('section', section.name)}
+                  >
+                    {sending('section', section.name) ? (
+                      <CircleNotchIcon className="size-4 animate-spin" />
+                    ) : (
+                      <PlayIcon weight="fill" className="size-4" />
+                    )}
+                    {finished ? 'Done' : sectionDone ? 'Continue' : 'Start'}
+                  </Button>
+                </div>
+              )}
+              {section.awards.length === 0 ? (
+                <p className="text-muted-foreground p-2 text-xs">No awards in this section.</p>
+              ) : (
+                <ul className="flex flex-col gap-1 p-2">
+                  {section.awards.map((a) => {
+                    const count = done(a.category, a.winners);
+                    return (
+                      <li key={a.category} className="flex items-center gap-2 text-sm">
+                        <PlayButton
+                          label={`Announce ${a.category}`}
+                          sending={sending('award', a.category)}
+                          disabled={!canAct}
+                          onClick={() => send('award', a.category)}
+                          variant="outline"
+                        />
+                        <span className="min-w-0 flex-1">{a.category}</span>
+                        {count === a.winners ? (
+                          <CheckCircleIcon
+                            weight="fill"
+                            className="size-4 shrink-0 text-green-600"
+                          />
+                        ) : (
+                          <span className="text-muted-foreground text-xs">
+                            {count}/{a.winners}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <Button
+        variant="destructive"
+        size="lg"
+        className="mt-3 w-full"
+        disabled={!canAct}
+        onClick={() => {
+          if (exitArmed) {
+            setExitArmedAt(0);
+            send('end_awards');
+          } else {
+            setExitArmedAt(Date.now());
+          }
+        }}
+      >
+        <StopIcon weight="fill" className="size-5" />
+        {exitArmed
+          ? winners - announced > 0
+            ? `Tap again to exit (${winners - announced} not announced)`
+            : 'Tap again to exit the awards'
+          : 'Exit the awards'}
+      </Button>
+    </Card>
+  );
+
+  const music = (
+    <Card title="Music" aside={view.music ? `Playing: ${view.music}` : undefined} compact={compact}>
+      <ul className="mt-3 flex flex-col gap-2">
+        {[
+          ...(view.songs ?? []).map((name) => ({ action: 'song' as const, name, label: name })),
+          {
+            action: 'suspense' as const,
+            name: '',
+            label: 'Suspense music (one minute)',
+          },
+        ].map((track) => (
+          <li key={`${track.action}:${track.name}`} className="flex items-center gap-3">
+            <PlayButton
+              label={`Play ${track.label}`}
+              sending={sending(track.action, track.name)}
+              disabled={!stageOpen}
+              onClick={() => send(track.action, track.name)}
+              variant="secondary"
+            />
+            <span className="flex-1 text-sm">{track.label}</span>
+          </li>
+        ))}
+      </ul>
+      {view.songs.length === 0 && (
+        <p className="text-muted-foreground mt-2 text-xs">
+          Add songs on the Customise tab (Songs for breaks) to play them from here.
+        </p>
+      )}
+      <Button
+        variant="outline"
+        className="mt-3 w-full"
+        disabled={!stageOpen || !view.music}
+        onClick={() => send('stop_music')}
+      >
+        <SpeakerSimpleSlashIcon className="size-5" /> Stop the music
+      </Button>
+    </Card>
+  );
+
+  if (compact) {
+    const tabs: { code: PanelTab; label: string }[] = [
+      { code: 'events', label: `Events ${eventsDone}/${view.events.length}` },
+      { code: 'awards', label: `Awards ${announced}/${winners}` },
+      { code: 'music', label: view.music ? 'Music ♪' : 'Music' },
+    ];
+    return (
+      <div className="flex flex-col gap-2 p-2">
+        {status}
+        <div role="tablist" aria-label="Remote" className="grid grid-cols-3 gap-1">
+          {tabs.map((t) => (
+            <button
+              key={t.code}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.code}
+              onClick={() => setTab(t.code)}
+              className={`rounded-md px-2 py-2 text-xs font-semibold ${
+                tab === t.code
+                  ? 'bg-foreground text-background'
+                  : 'bg-muted text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {tab === 'events' ? events : tab === 'awards' ? awardsCard : music}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-6 flex flex-col gap-4">
+      <div className="flex flex-wrap items-start gap-3">
+        <p className="text-muted-foreground flex-1 text-xs">
+          A click here makes Tina act at once, no need to call her. Keep this page on the laptop
+          screen; only the stage window goes on the TV (Windows: Win+P → Extend). Saving the
+          settings updates these lists and Tina. Mute Tina during speeches, songs and other loud
+          moments, so she can&rsquo;t pick up the stage and start talking.
+        </p>
+        {onOpenRemote && (
+          <Button variant="outline" size="sm" onClick={onOpenRemote}>
+            <ArrowSquareOutIcon className="size-4" /> Open floating remote
+          </Button>
+        )}
+      </div>
+      {status}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {events}
+        {awardsCard}
+      </div>
+      {music}
     </div>
   );
 }

@@ -16,10 +16,14 @@ import { useCallDiagnostics } from '@/hooks/useCallDiagnostics';
 import { DEFAULT_VOICE, VOICES, type VoiceCode } from '@/lib/agent-channels';
 import {
   type Award,
+  type AwardSection,
   type CeremonySettings,
+  DEFAULT_SECTIONS,
   DEFAULT_SETTINGS,
+  type SectionDeck,
   loadAwards,
   loadDeck,
+  loadSections,
   loadServerSettings,
   loadSettings,
   saveSettings,
@@ -56,7 +60,7 @@ function StageLauncher({
       <p className="max-w-lg text-sm text-white/70">
         {ready
           ? 'Move this window to the TV (Windows: Win+P → Extend, then drag it across), then start Tina and press F for full screen. Keep the settings page with the host panel on the laptop.'
-          : 'Loading the deck and the awards saved on this laptop… Upload the deck on the settings page first if this doesn’t finish.'}
+          : 'Loading the award PDFs and the awards saved on this laptop… Upload each award section’s PDF on the settings page first if this doesn’t finish.'}
       </p>
       <Button
         size="lg"
@@ -127,34 +131,65 @@ export function CeremonyApp({
     roomName,
   });
 
-  const [deck, setDeck] = useState<PDFDocumentProxy | null>(null);
   const [awards, setAwards] = useState<Award[]>([]);
+  // The award sections, each with its PDF (kept on this laptop).
+  const [sections, setSections] = useState<AwardSection[]>(DEFAULT_SECTIONS);
+  const [docs, setDocs] = useState<Record<string, PDFDocumentProxy>>({});
+  const [docsLoaded, setDocsLoaded] = useState(false);
+  const decks: SectionDeck<PDFDocumentProxy>[] = useMemo(
+    () => sections.map((s) => ({ ...s, doc: docs[s.id] ?? null })),
+    [sections, docs]
+  );
+  const setDoc = (id: string, doc: PDFDocumentProxy | null) =>
+    setDocs((all) => {
+      const rest = { ...all };
+      delete rest[id];
+      return doc ? { ...rest, [id]: doc } : rest;
+    });
   const [onStage, setOnStage] = useState(false);
   // The stage window: Tina has been started (and maybe ended) from it.
   const [ended, setEnded] = useState(false);
 
-  // The stage window loads what the settings page saved on this laptop, and reloads
-  // the settings and awards whenever they're saved again.
+  // What was prepared on this laptop: the awards, their sections and PDFs. The stage
+  // window loads it again whenever the settings are saved.
   useEffect(() => {
-    if (mode !== 'stage') {
-      return;
-    }
-    setAwards(loadAwards());
-    void (async () => {
-      const saved = await loadDeck();
-      if (saved) {
-        setDeck(await openPdf(await saved.arrayBuffer()));
+    let stopped = false;
+    const load = async () => {
+      const saved = loadSections();
+      const loaded: Record<string, PDFDocumentProxy> = {};
+      for (const section of saved) {
+        const file = await loadDeck(section.id);
+        if (file) {
+          loaded[section.id] = await openPdf(await file.arrayBuffer());
+        }
       }
-    })();
+      if (!stopped) {
+        setAwards(loadAwards());
+        setSections(saved);
+        setDocs(loaded);
+        setDocsLoaded(true);
+      }
+    };
+    void load();
+    if (mode !== 'stage') {
+      return () => {
+        stopped = true;
+      };
+    }
     const channel = new BroadcastChannel(HOST_CHANNEL);
     channel.onmessage = (e: MessageEvent<HostMessage>) => {
       if (e.data.kind === 'settings') {
         setSettings(loadSettings());
-        setAwards(loadAwards());
+        void load();
       }
     };
-    return () => channel.close();
+    return () => {
+      stopped = true;
+      channel.close();
+    };
   }, [mode]);
+  // The stage needs at least one PDF (or no awards at all).
+  const stageReady = docsLoaded && (awards.length === 0 || Object.keys(docs).length > 0);
 
   // A fresh room after every disconnect, so a reconnect dispatches a new Tina.
   const wasActive = useRef(false);
@@ -204,9 +239,9 @@ export function CeremonyApp({
     <AgentSessionProvider session={session}>
       <SessionHooks />
       {mode === 'stage' ? (
-        onStage && deck ? (
+        onStage && stageReady ? (
           <CeremonyStage
-            deck={deck}
+            decks={decks}
             awards={awards}
             settings={settings}
             onReconnect={start}
@@ -214,15 +249,15 @@ export function CeremonyApp({
           />
         ) : (
           <StageLauncher
-            ready={deck !== null && awards.length > 0}
+            ready={stageReady}
             ended={ended}
             starting={session.connectionState === ConnectionState.Connecting}
             onStart={() => void start()}
           />
         )
-      ) : onStage && deck ? (
+      ) : onStage && stageReady ? (
         <CeremonyStage
-          deck={deck}
+          decks={decks}
           awards={awards}
           settings={settings}
           onReconnect={start}
@@ -230,8 +265,9 @@ export function CeremonyApp({
         />
       ) : (
         <CeremonySetup
-          deck={deck}
-          onDeckChange={setDeck}
+          decks={decks}
+          onDocChange={setDoc}
+          onSectionsChange={setSections}
           awards={awards}
           onAwardsChange={setAwards}
           voice={voice}

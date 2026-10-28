@@ -28,6 +28,7 @@ from livekit.agents import (
     function_tool,
     llm,
     stt,
+    tokenize,
     tts,
     utils,
 )
@@ -289,6 +290,54 @@ def silence(seconds: float, rate: int = 24000) -> AsyncIterable[rtc.AudioFrame]:
     return frames()
 
 
+def _gap(seconds: float, like: rtc.AudioFrame | None) -> list[rtc.AudioFrame]:
+    """Silence matching the speech around it (its sample rate and channels)."""
+    rate = like.sample_rate if like else 24000
+    channels = like.num_channels if like else 1
+    samples = rate // 50
+    return [
+        rtc.AudioFrame(b"\0\0" * samples * channels, rate, channels, samples)
+        for _ in range(int(seconds * 50))
+    ]
+
+
+async def _once(text: str) -> AsyncIterable[str]:
+    yield text
+
+
+async def _synthesize(synthesizer: tts.TTS, text: str) -> AsyncIterable[rtc.AudioFrame]:
+    async with synthesizer.synthesize(text) as stream:
+        async for audio in stream:
+            yield audio.frame
+
+
+async def with_pauses(text: AsyncIterable[str], speak) -> AsyncIterable[rtc.AudioFrame]:
+    """Says the text sentence by sentence (speak(sentence) gives its audio), with a
+    short pause between sentences, so a long passage isn't rushed."""
+    sentences = tokenize.blingfire.SentenceTokenizer().stream()
+
+    async def push() -> None:
+        async for chunk in text:
+            sentences.push_text(chunk)
+        sentences.end_input()
+
+    pushing = asyncio.create_task(push())
+    last: rtc.AudioFrame | None = None
+    try:
+        async for sentence in sentences:
+            if not sentence.token.strip():
+                continue
+            if last is not None:
+                for frame in _gap(SENTENCE_GAP_SECONDS, last):
+                    yield frame
+            async for frame in speak(sentence.token):
+                last = frame
+                yield frame
+    finally:
+        await utils.aio.cancel_and_wait(pushing)
+        await sentences.aclose()
+
+
 def script_language(text: str) -> str:
     """The language of the first Indic letter in the text, else "en"."""
     for char in text:
@@ -296,6 +345,13 @@ def script_language(text: str) -> str:
             if low <= char <= high:
                 return language
     return "en"
+
+
+def _draw_number(raw, default: int) -> int:
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return default
 
 
 def _languages(raw) -> list[str]:
@@ -319,11 +375,41 @@ class Award:
     announced: bool = False
     # Said once before the category's first winner, e.g. what the award recognises.
     intro: str = ""
+    # The award section it belongs to, e.g. "Sports Awards" ("": the only one).
+    section: str = ""
 
 
 EventTrigger = Literal["called", "appear", "first_call"]
+EventKind = Literal["say", "ask_ai", "lucky_draw"]
 DEFAULT_EVENT_MUSIC_SECONDS = 60
 MAX_EVENT_MUSIC_SECONDS = 300
+# The lucky draw: the jar spins (with suspense music) this long before the number.
+LUCKY_DRAW_SECONDS = 30
+DEFAULT_DRAW_FROM = 1000
+DEFAULT_DRAW_TO = 5000
+# How many lucky draws are planned (the host can roll again that often, or more).
+DEFAULT_DRAWS = 5
+MAX_DRAWS = 50
+LUCKY_LEAD = "And the lucky number is"
+LUCKY_CHEER = "Congratulations to our lucky winner!"
+DIGIT_WORDS = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+]
+# Each digit falls from the jar this long before Tina says it.
+LUCKY_DIGIT_FALL_SECONDS = 0.6
+# Pauses Tina makes between the sentences of anything she says, and between the
+# languages of a multilingual text.
+SENTENCE_GAP_SECONDS = 0.5
+LANGUAGE_GAP_SECONDS = 2.0
 
 
 @dataclass
@@ -343,7 +429,12 @@ class CeremonyEvent:
     languages: list[str] = field(default_factory=lambda: ["en"])
     translations: dict[str, str] = field(default_factory=dict)
     # "ask_ai": after its text, Tina takes questions from the audience on stage.
-    kind: Literal["say", "ask_ai"] = "say"
+    # "lucky_draw": after its text, Tina draws a lucky number between draw_from and
+    # draw_to (a new one each time it's called).
+    kind: EventKind = "say"
+    draw_from: int = DEFAULT_DRAW_FROM
+    draw_to: int = DEFAULT_DRAW_TO
+    draws: int = DEFAULT_DRAWS
     # Played once Tina has said the text, e.g. devotional music for the lamp lighting
     # (an audio file or YouTube link), for this many seconds.
     music: str = ""
@@ -611,6 +702,7 @@ class CeremonyProgram:
                 script=str(item["script"]).strip(),
                 slide=int(item.get("slide", 1)),
                 intro=str(item.get("intro") or "").strip(),
+                section=str(item.get("section") or "").strip(),
             )
             for item in items
             if str(item.get("category", "")).strip()
@@ -626,7 +718,12 @@ class CeremonyProgram:
                 else "called",
                 languages=_languages(e.get("languages")),
                 translations=_translations(e.get("translations")),
-                kind="ask_ai" if e.get("kind") == "ask_ai" else "say",
+                kind=e["kind"] if e.get("kind") in ("ask_ai", "lucky_draw") else "say",
+                draw_from=_draw_number(e.get("draw_from"), DEFAULT_DRAW_FROM),
+                draw_to=_draw_number(e.get("draw_to"), DEFAULT_DRAW_TO),
+                draws=min(
+                    max(_draw_number(e.get("draws"), DEFAULT_DRAWS), 1), MAX_DRAWS
+                ),
                 music=str(e.get("music") or "").strip(),
                 music_seconds=min(
                     max(int(e.get("music_seconds") or DEFAULT_EVENT_MUSIC_SECONDS), 5),
@@ -652,6 +749,16 @@ class CeremonyProgram:
             names.setdefault(_event_key(e.name), e)
         return _closest(_event_key(spoken), names)
 
+    def find_event(self, name: str) -> CeremonyEvent | None:
+        """The event clicked on the host's panel: any of them, including her
+        introduction and the greeting."""
+        return next(
+            (e for e in self.events if e.name == name), None
+        ) or self.match_event(name)
+
+    def lucky_draw(self) -> CeremonyEvent | None:
+        return next((e for e in self.events if e.kind == "lucky_draw"), None)
+
     def next_event(self) -> CeremonyEvent | None:
         return next((e for e in self.events_on("called") if not e.done), None)
 
@@ -660,6 +767,12 @@ class CeremonyProgram:
         the lamp lighting"), or the next one: a request to Tina even without her name."""
         said = _event_key(text)
         if re.search(r"\bnext (event|award|category)\b", said):
+            return True
+        if self.lucky_draw() and re.search(
+            r"\blucky (draw|number)\b|\bdraw (a|another|the|one more) (lucky )?number\b"
+            r"|\b(roll|spin|draw) (it )?again\b",
+            said,
+        ):
             return True
 
         def parts(key: str) -> list[str]:
@@ -683,7 +796,7 @@ class CeremonyProgram:
         norm = _norm(text)
         return any(
             f" {part} " in f" {norm} "
-            for c in self.categories()
+            for c in self.categories() + [s for s in self.sections() if s]
             for part in parts(_norm(c))
         )
 
@@ -692,6 +805,7 @@ class CeremonyProgram:
         words = ["Tina", "டீனா", host_name.strip()]
         words += [e.name for e in self.events_on("called")]
         words += self.categories()
+        words += [s for s in self.sections() if s]
         return [w for w in dict.fromkeys(w.strip() for w in words) if w][:100]
 
     def categories(self) -> list[str]:
@@ -723,11 +837,23 @@ class CeremonyProgram:
         close = difflib.get_close_matches(wanted, list(names), n=1, cutoff=0.6)
         return names[close[0]] if close else None
 
-    def next_category(self) -> str | None:
+    def next_category(self, section: str | None = None) -> str | None:
+        """The first category not fully announced (in the section, if given)."""
         for category in self.categories():
-            if any(not a.announced for a in self.entries(category)):
+            entries = self.entries(category)
+            if section is not None and _norm(entries[0].section) != _norm(section):
+                continue
+            if any(not a.announced for a in entries):
                 return category
         return None
+
+    def sections(self) -> list[str]:
+        """Award section names in presentation order, each once ("" for none)."""
+        return list(dict.fromkeys(a.section for a in self.awards))
+
+    def match_section(self, spoken: str) -> str | None:
+        names = {_norm(s): s for s in self.sections() if s}
+        return _closest(_norm(spoken), names) if names else None
 
 
 HOST_STYLES = {
@@ -843,8 +969,17 @@ class CeremonyHost(Agent):
         self._video_started = 0.0
         # The suspense track played last, so the next one differs.
         self._last_suspense = ""
-        # The slide on screen, so a winner on the same slide isn't hidden again.
+        # The slide and award on screen, so a further winner on it (a team) isn't
+        # hidden again.
         self._shown_slide = 0
+        self._shown_category = ""
+        # The host's mute key: Tina neither hears nor speaks. Announcements still to
+        # come wait for the unmute.
+        self._muted = False
+        self._unmuted = asyncio.Event()
+        self._unmuted.set()
+        # Lucky numbers drawn so far (none is drawn twice).
+        self._lucky_numbers: list[int] = []
         # Ask AI: the audience asks questions on stage, without saying Tina's name.
         self._ask_ai = False
         # Tina reminds the host once of awards not yet announced before ending; the
@@ -915,7 +1050,8 @@ class CeremonyHost(Agent):
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[rtc.AudioFrame]:
-        """Speaks a reply in another language (e.g. Tamil) with that language's voice."""
+        """Speaks sentence by sentence with a short pause between them; a reply in
+        another language (e.g. Tamil) with that language's voice."""
         chunks = text.__aiter__()
         head: list[str] = []
         # Enough of the start to tell the language (a reply may start with a name).
@@ -932,22 +1068,18 @@ class CeremonyHost(Agent):
                 yield chunk
 
         if language == "en":
-            async for frame in Agent.default.tts_node(self, whole(), model_settings):
-                yield frame
-            return
-        async with self._tts_for(language).stream() as stream:
 
-            async def push() -> None:
-                async for chunk in whole():
-                    stream.push_text(chunk)
-                stream.end_input()
+            def speak(sentence: str) -> AsyncIterable[rtc.AudioFrame]:
+                return Agent.default.tts_node(self, _once(sentence), model_settings)
 
-            pushing = asyncio.create_task(push())
-            try:
-                async for audio in stream:
-                    yield audio.frame
-            finally:
-                await utils.aio.cancel_and_wait(pushing)
+        else:
+            synthesizer = self._tts_for(language)
+
+            def speak(sentence: str) -> AsyncIterable[rtc.AudioFrame]:
+                return _synthesize(synthesizer, sentence)
+
+        async for frame in with_pauses(whole(), speak):
+            yield frame
 
     def _run(self, coro) -> None:
         task = asyncio.create_task(coro)
@@ -988,6 +1120,8 @@ class CeremonyHost(Agent):
         self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
     ) -> None:
         text = (new_message.text_content or "").strip()
+        if self._muted:
+            raise self._ignored("muted")
         if self._pending_task:
             self._pending_task.cancel()
             self._pending_task = None
@@ -1124,7 +1258,7 @@ class CeremonyHost(Agent):
             await asyncio.sleep(0.25)
         text, self._pending = self._pending, ""
         self._pending_task = None
-        if text and not self.on_hold:
+        if text and not self.on_hold and not self._muted:
             self.session.generate_reply(user_input=text)
 
     def greet_on_first_call(self, parts: list[tuple[str, str]]) -> None:
@@ -1145,17 +1279,27 @@ class CeremonyHost(Agent):
         self._wake.close()
         handle = None
         for language, text in parts:
+            if handle is not None:
+                # A breath between one language and the next.
+                session.say(
+                    " ",
+                    audio=silence(LANGUAGE_GAP_SECONDS),
+                    allow_interruptions=False,
+                    add_to_chat_ctx=False,
+                )
             if language == "en":
                 handle = session.say(text, allow_interruptions=False)
                 continue
             synthesizer = self._tts_for(language)
 
-            async def frames(text: str = text, synthesizer: tts.TTS = synthesizer):
-                async with synthesizer.synthesize(text) as stream:
-                    async for audio in stream:
-                        yield audio.frame
+            def speak(sentence: str, synthesizer: tts.TTS = synthesizer):
+                return _synthesize(synthesizer, sentence)
 
-            handle = session.say(text, audio=frames(), allow_interruptions=False)
+            handle = session.say(
+                text,
+                audio=with_pauses(_once(text), speak),
+                allow_interruptions=False,
+            )
         self._last_said = list(parts)
         return handle
 
@@ -1177,8 +1321,13 @@ class CeremonyHost(Agent):
 
     def _build_instructions(self) -> str:
         lines = []
+        sections = [s for s in self._program.sections() if s]
+        section = None
         for category in self._program.categories():
             entries = self._program.entries(category)
+            if sections and entries[0].section != section:
+                section = entries[0].section
+                lines.append(f"## Section: {section or '(no section)'}")
             done = sum(a.announced for a in entries)
             count = f", {len(entries)} winners" if len(entries) > 1 else ""
             status = (
@@ -1204,6 +1353,8 @@ class CeremonyHost(Agent):
                 - The programme also has events (listed below), such as the lamp lighting, a speech or a performance. The host calls them by name, in any order ("Tina, the lamp lighting please", "Tina, let's begin the fashion walk"): call start_event with the closest event name (e.g. "the welcome note" or "the welcome address" is the Welcome Message), which speaks the event's approved text word-for-word. For "the next event", call start_next_event. Events are not awards: never use announce_award for an event, or start_event for an award. If the host asks for an event that's already done, start it again.
                 - When an announce tool succeeds it returns nothing; the announcement you then see in the conversation (ending with the congratulations to the winner) is the approved text and was spoken successfully. The same goes for the events. Never apologise for it, comment on it or repeat it.
                 - Some categories have several winners: one announce call announces all of them, one after another, each with its slide. Some categories also have an introduction (what the award recognises), which the announce tools say first.
+                - The awards may be grouped in sections (e.g. Sports Awards, Cultural Awards; listed below). When the host asks to start or move on to a section by its name ("Tina, let's begin the sports awards"), call announce_next_award with the section's name, which announces that section's next award.
+                - The lucky draw, if listed among the events, draws a random number each time: when the host asks for it, for a lucky number or to roll again ("Tina, draw a lucky number", "roll again", "one more number please"), call start_event with its name. Never make up a number yourself.
                 - If the host asks for a category that isn't in the list, say so briefly and mention the closest category names.
                 - If a category is fully announced and the host asks for it again, confirm first; if they confirm, call announce_award with repeat set to true.
                 - Use show_slide when the host asks to show a particular slide (the title slide is slide one), and hide_slides when they ask to hide the slide or show you instead.
@@ -1214,7 +1365,7 @@ class CeremonyHost(Agent):
                 - The host often speaks to the audience rather than to you, e.g. "We have our leaders and associates gathered here", introducing guests or announcing a break. If the host's latest words weren't said to you and don't use your name, call not_for_me and say nothing; never answer a remark made to the audience.
                 - If the host asks a general question (facts, news, sports scores, weather, a person or company), call web_search and answer in one or two short sentences. Never use web search to find award winners.
                 - When the host asks for one of the songs listed below by name ("Tina, play Jai Ho"), call play_song; it plays to the end. Then say at most two words, e.g. "Enjoy, everyone!" "Stop the music" calls stop_music.
-                - For a lucky draw or an on-the-spot award, when the host asks for suspense music or a drum roll ("Tina, play the suspense music"), call play_suspense_music, then say one short, excited line, e.g. "Let's find out who the lucky one is!"
+                - For an on-the-spot award, or a lucky draw done by hand, when the host asks for suspense music or a drum roll ("Tina, play the suspense music"), call play_suspense_music, then say one short, excited line, e.g. "Let's find out who the lucky one is!"
                 - When the host asks for the music or video to be louder or softer, call change_volume, then say at most two words, e.g. "Sure!"
                 - When the host asks you to play or show any other video, clip or song, call play_video with a short YouTube search query. While it plays you stay silent.
                 - Spell out numbers.
@@ -1229,7 +1380,9 @@ class CeremonyHost(Agent):
             + "\n\n# Events the host can call by name, in any order\n"
             + (
                 "\n".join(
-                    f"- {e.name}{' (done)' if e.done else ''}"
+                    f"- {e.name}"
+                    + (" (lucky draw)" if e.kind == "lucky_draw" else "")
+                    + (" (done)" if e.done and e.kind != "lucky_draw" else "")
                     for e in self._program.events_on("called")
                 )
                 or "- (none)"
@@ -1285,6 +1438,8 @@ class CeremonyHost(Agent):
                 },
                 "ask_ai": self._ask_ai,
                 "on_hold": self.on_hold,
+                "muted": self._muted,
+                "lucky_numbers": self._lucky_numbers,
             }
         )
 
@@ -1303,6 +1458,43 @@ class CeremonyHost(Agent):
         await self._send_status({"type": "hold", "on": False})
         if say:
             session.say(self._line(RESUME_REPLY), allow_interruptions=False)
+        await self._send_progress()
+
+    async def _go_ahead(self) -> None:
+        """Waits while Tina is on hold or muted."""
+        while not (self._resumed.is_set() and self._unmuted.is_set()):
+            await self._resumed.wait()
+            await self._unmuted.wait()
+
+    async def set_muted(self, muted: bool) -> None:
+        """The host's mute key: while muted Tina neither hears nor speaks (noise from
+        the stage can't set her off); unmuted, she listens for her name again."""
+        if muted == self._muted:
+            return
+        session = self.session
+        self._muted = muted
+        logger.info("muted" if muted else "unmuted")
+        self._note("muted" if muted else "unmuted")
+        try:
+            session.input.set_audio_enabled(not muted)
+        except Exception as e:
+            logger.warning("could not switch the microphone input: %s", e)
+        self._wake.close()
+        if muted:
+            self._unmuted.clear()
+            self._pending = ""
+            if self._pending_task:
+                self._pending_task.cancel()
+                self._pending_task = None
+            # A lucky draw or an event's music still to come doesn't happen.
+            self._event_count += 1
+            try:
+                session.interrupt(force=True)
+            except RuntimeError as e:
+                logger.warning("could not stop Tina's speech: %s", e)
+        else:
+            self._unmuted.set()
+        await self._send_status({"type": "mute", "on": muted})
         await self._send_progress()
 
     async def update_program(self, program: CeremonyProgram) -> None:
@@ -1346,6 +1538,13 @@ class CeremonyHost(Agent):
         if action == "stop_music":
             await self._send_status({"type": "music_stop"})
             return
+        if action in ("mute", "unmute"):
+            await self.set_muted(action == "mute")
+            return
+        if self._muted:
+            # The panel disables these while muted; a late click does nothing.
+            self._note("ignored", reason="muted")
+            return
         if self.on_hold:
             # Starting something is the host's clear wish to carry on.
             await self._resume(session, say=False)
@@ -1354,10 +1553,9 @@ class CeremonyHost(Agent):
         if current is not None and current.allow_interruptions:
             current.interrupt()
         if action == "event":
-            event = next(
-                (e for e in self._program.events_on("called") if e.name == name),
-                None,
-            ) or self._program.match_event(name)
+            # Any event, also her introduction and the greeting (e.g. when the stage's
+            # sound failed the first time).
+            event = self._program.find_event(name)
             if event is not None:
                 await self._start_event(session, event)
         elif action == "next_award":
@@ -1365,6 +1563,13 @@ class CeremonyHost(Agent):
             if category is None:
                 session.say(ALL_AWARDS_DONE, allow_interruptions=False)
             else:
+                await self._announce_category(session, category, repeat=False)
+        elif action == "section":
+            section = name if name in self._program.sections() else None
+            category = (
+                self._program.next_category(section) if section is not None else None
+            )
+            if category is not None:
                 await self._announce_category(session, category, repeat=False)
         elif action == "award":
             category = self._program.match(name)
@@ -1388,11 +1593,17 @@ class CeremonyHost(Agent):
         self._wake.close()
         settings = self._program.settings
         lead, reveal = settings.announcement_parts(award)
-        # A new slide: hide the winner until Tina says the name. Further winners on
-        # the same slide (a team) are named straight away.
-        suspense = settings.suspense and bool(lead) and award.slide != self._shown_slide
-        await self._send_slide(award.slide, hidden=suspense, title=award.category)
+        # A new award or slide: hide the winner until Tina says the name. Further
+        # winners of the award on the same slide (a team) are named straight away.
+        new = award.slide != self._shown_slide or _norm(award.category) != _norm(
+            self._shown_category
+        )
+        suspense = settings.suspense and bool(lead) and new
+        await self._send_slide(
+            award.slide, hidden=suspense, title=award.category, section=award.section
+        )
         self._shown_slide = award.slide
+        self._shown_category = award.category
         award.announced = True
         if not suspense:
             # The approved text, exactly as written; applause must not cut it off.
@@ -1425,6 +1636,9 @@ class CeremonyHost(Agent):
     async def _applause_after(self, handle: SpeechHandle, award: Award) -> None:
         """Once the announcement ends: the ovation and the award's walk-up music."""
         await handle.wait_for_playout()
+        if handle.interrupted:
+            # Muted mid-announcement.
+            return
         await self._send_status(
             {"type": "applause", "category": award.category, "winner": award.winner}
         )
@@ -1438,8 +1652,8 @@ class CeremonyHost(Agent):
         for award in rest:
             await previous.wait_for_playout()
             await asyncio.sleep(self._program.settings.pause_seconds)
-            # "please hold" pauses the remaining winners too.
-            await self._resumed.wait()
+            # "please hold" (or the mute key) pauses the remaining winners too.
+            await self._go_ahead()
             previous = await self._speak(session, award)
         await self._refresh()
 
@@ -1492,7 +1706,7 @@ class CeremonyHost(Agent):
         if intro:
             await intro.wait_for_playout()
         # "please hold" during the introduction holds the announcement too.
-        await self._resumed.wait()
+        await self._go_ahead()
         first = await self._speak(session, pending[0])
         if pending[1:]:
             await self._continue_category(session, first, pending[1:])
@@ -1517,6 +1731,9 @@ class CeremonyHost(Agent):
         logger.info("event: %s (slide %d)", event.name, event.slide)
         # Ask AI runs until the host moves on to another event.
         self._ask_ai = event.kind == "ask_ai"
+        if event.trigger == "first_call":
+            # Greeted from the panel: the host's first "Hello Tina" doesn't repeat it.
+            self._greeting = []
         # The stage stops any music or video for an event; don't wait for it to say so
         # (a missed "stopped" left Tina requiring her name from the audience).
         self._media.clear()
@@ -1526,17 +1743,98 @@ class CeremonyHost(Agent):
         else:
             await self._send_view("tina")
         # The stage shows the event's name (through Ask AI) and ends any music or video.
+        lucky = event.kind == "lucky_draw"
         await self._send_status(
-            {"type": "event", "name": event.name, "sticky": self._ask_ai}
+            {"type": "event", "name": event.name, "sticky": self._ask_ai or lucky}
         )
-        handle = self.say_parts(session, await self.event_parts(event))
+        if lucky and self._lucky_numbers:
+            # Rolling again: straight to the jar, without the opening text.
+            parts = [("en", self._roll_again_line(event))]
+        else:
+            parts = await self.event_parts(event)
+        handle = self.say_parts(session, parts)
         event.done = True
         self._event_count += 1
-        if event.music and handle:
+        if lucky:
+            self._run(self._draw_after(handle, event, self._event_count))
+        elif event.music and handle:
             self._run(self._music_after(handle, event, self._event_count))
-        if handle and not self._ask_ai:
+        if handle and not self._ask_ai and not lucky:
             self._run(self._listen_after(handle))
         await self._refresh()
+
+    def _roll_again_line(self, event: CeremonyEvent) -> str:
+        draw = len(self._lucky_numbers) + 1
+        if draw <= event.draws:
+            return f"Let's roll again! Lucky draw number {draw} of {event.draws}."
+        return "Let's roll again! One more lucky draw."
+
+    async def _draw_after(
+        self, handle: SpeechHandle | None, event: CeremonyEvent, count: int
+    ) -> None:
+        """The lucky draw, once Tina has said its text: the jar spins to suspense music,
+        then the number falls out digit by digit, left to right, as Tina says each."""
+        if handle:
+            await handle.wait_for_playout()
+
+        def going() -> bool:
+            # Not if the host has moved on (or muted Tina) meanwhile.
+            return count == self._event_count and not self._muted
+
+        if not going():
+            return
+        low, high = sorted((event.draw_from, event.draw_to))
+        number = random.randint(low, high)
+        for _ in range(100):
+            if number not in self._lucky_numbers:
+                break
+            number = random.randint(low, high)
+        digits = str(number)
+        logger.info("lucky draw: %s", digits)
+        await self._send_status(
+            {
+                "type": "lucky_draw",
+                "id": count,
+                "name": event.name,
+                "seconds": LUCKY_DRAW_SECONDS,
+                "digits": len(digits),
+                "from": low,
+                "to": high,
+                "round": len(self._lucky_numbers) + 1,
+                "rounds": event.draws,
+            }
+        )
+        done = False
+        try:
+            for _ in range(LUCKY_DRAW_SECONDS * 4):
+                await asyncio.sleep(0.25)
+                if not going():
+                    return
+            session = self.session
+            lead = session.say(LUCKY_LEAD, allow_interruptions=False)
+            await lead.wait_for_playout()
+            for index, digit in enumerate(digits):
+                if not going():
+                    return
+                await self._send_status(
+                    {"type": "lucky_digit", "id": count, "index": index, "digit": digit}
+                )
+                await asyncio.sleep(LUCKY_DIGIT_FALL_SECONDS)
+                said = session.say(DIGIT_WORDS[int(digit)], allow_interruptions=False)
+                await said.wait_for_playout()
+            if not going():
+                return
+            done = True
+            self._lucky_numbers.append(number)
+            self._note("lucky number", number=number)
+            final = session.say(f"{number}! {LUCKY_CHEER}", allow_interruptions=False)
+            self._last_said = [("en", f"The lucky number is {number}.")]
+            await self._send_progress()
+            await final.wait_for_playout()
+            self._wake.open()
+        finally:
+            if not done:
+                await self._send_status({"type": "lucky_draw_cancel", "id": count})
 
     async def _listen_after(self, handle: SpeechHandle) -> None:
         """Once Tina has said an event's text, the host usually turns to her next ("can
@@ -1661,10 +1959,24 @@ class CeremonyHost(Agent):
         return result.answer
 
     @function_tool()
-    async def announce_next_award(self, ctx: RunContext) -> str:
-        """Announce the next award that hasn't been announced yet, in presentation order."""
-        category = self._program.next_category()
+    async def announce_next_award(self, ctx: RunContext, section: str) -> str:
+        """Announce the next award that hasn't been announced yet, in presentation order;
+        or, when the host names an award section ("Tina, let's begin the sports
+        awards"), that section's next award.
+
+        Args:
+            section: The award section the host named, as close to the list as possible; empty if none.
+        """
+        matched = None
+        if section.strip():
+            matched = self._program.match_section(section)
+            if matched is None:
+                names = ", ".join(s for s in self._program.sections() if s) or "none"
+                return f"No section matches {section!r}. The sections are: {names}."
+        category = self._program.next_category(matched)
         if category is None:
+            if matched:
+                return f"Every award in {matched} has been announced. Say so briefly."
             return "Every award has been announced."
         return await self._announce(ctx, category, False)
 

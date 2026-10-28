@@ -433,6 +433,87 @@
   animation: reveal-name 10s ease-out both;
 }
 
+/* Each new award section: its name in gold on the curtains' valance. */
+.curtain-label {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 12vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fde68a;
+  font-size: 5vh;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-shadow: 0 0.4vh 1.5vh rgb(0 0 0 / 0.7);
+}
+.curtains-opening .curtain-label {
+  animation: valance-lift 2.6s ease-in forwards;
+}
+
+/* The lucky draw: the jar rocks while its balls tumble, tips to pour, and each digit's
+   ball pops out of it and falls into its place. */
+@keyframes lucky-rock {
+  0%,
+  100% {
+    transform: rotate(-14deg);
+  }
+  50% {
+    transform: rotate(14deg);
+  }
+}
+.lucky-jar-rock {
+  animation: lucky-rock 0.7s ease-in-out infinite;
+}
+.lucky-jar-pour {
+  transform: rotate(-10deg);
+  transition: transform 0.6s ease-out;
+}
+@keyframes lucky-balls-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.lucky-balls-spin {
+  animation: lucky-balls-spin 0.9s linear infinite;
+}
+@keyframes lucky-ball-fall {
+  0% {
+    opacity: 0;
+    transform: translate(var(--fall-x), -34vh) scale(0.3);
+  }
+  25% {
+    opacity: 1;
+    transform: translate(var(--fall-x), -62vh) scale(0.55);
+  }
+  78% {
+    transform: translate(0, 0) scale(1);
+  }
+  88% {
+    transform: translate(0, -3vh) scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+}
+.lucky-ball-fall {
+  animation: lucky-ball-fall 1.1s cubic-bezier(0.45, 0, 0.55, 1) both;
+}
+@keyframes lucky-win {
+  0%,
+  100% {
+    box-shadow: 0 0 2vh rgb(251 191 36 / 0.35);
+  }
+  50% {
+    box-shadow: 0 0 7vh rgb(251 191 36 / 0.75);
+  }
+}
+.lucky-win {
+  animation: lucky-win 1.6s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .hologram-materialize {
     animation: curtains-fade 1s ease-out reverse both;
@@ -449,8 +530,14 @@
   .ovation-photo,
   .slide-reveal,
   .suspense-pulse,
-  .typing-caret {
+  .typing-caret,
+  .lucky-jar-rock,
+  .lucky-balls-spin,
+  .lucky-win {
     animation: none;
+  }
+  .lucky-ball-fall {
+    animation: curtains-fade 0.6s ease-out reverse both;
   }
   .curtains-opening .curtain-left,
   .curtains-opening .curtain-right,

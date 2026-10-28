@@ -2,7 +2,14 @@
 // window, on the TV) are two windows of the same browser: they talk over a
 // BroadcastChannel. The stage forwards the host's clicks to Tina and tells the panel
 // what's happening; the settings page tells the stage when the settings were saved.
-import type { Award, CeremonySettings } from '@/lib/ceremony';
+import {
+  type Award,
+  type AwardSection,
+  type CeremonySettings,
+  type EventKind,
+  type EventTrigger,
+  sectionOf,
+} from '@/lib/ceremony';
 
 export const HOST_CHANNEL = 'tina-host';
 export const STAGE_PATH = '/ceremony/stage';
@@ -12,23 +19,43 @@ export type HostAction =
   | 'event'
   | 'next_award'
   | 'award'
+  // The next award of an award section (by its name).
+  | 'section'
   | 'pause'
   | 'resume'
   | 'end_awards'
   | 'end_ask_ai'
   | 'stop_music'
+  // Tina neither hears nor speaks until unmuted.
+  | 'mute'
+  | 'unmute'
   // Played by the stage itself, straight away: a song from the settings, the suspense music.
   | 'song'
   | 'suspense';
 
 export type HostCommand = { kind: 'command'; action: HostAction; name?: string };
 
+export type HostEvent = {
+  name: string;
+  kind: EventKind;
+  trigger: EventTrigger;
+  /** The lucky draw: how many draws are planned. */
+  draws?: number;
+};
+export type HostSection = {
+  /** As Tina knows it ('' when there's only one section). */
+  name: string;
+  /** Its award categories in presentation order, with their number of winners. */
+  awards: { category: string; winners: number }[];
+};
+
 /** The events, awards and songs the host panel lists. */
 export type HostLists = {
-  /** Events the host can call, in programme order. */
-  events: { name: string; kind: 'say' | 'ask_ai' }[];
-  /** Award categories in presentation order, with their number of winners. */
-  awards: { category: string; winners: number }[];
+  /** Every event in programme order, also those Tina says by herself (her
+   * introduction, the greeting): the panel can start any of them. */
+  events: HostEvent[];
+  /** The award sections in presentation order. */
+  sections: HostSection[];
   /** The songs on the Customise tab, by name. */
   songs: string[];
 };
@@ -45,10 +72,14 @@ export type HostState = HostLists & {
   now: string | null;
   music: string | null;
   onHold: boolean;
+  /** The host's mute key is on: Tina neither hears nor speaks. */
+  muted: boolean;
   askAi: boolean;
   eventsDone: string[];
   /** Winners announced per category. */
   awardsDone: Record<string, number>;
+  /** The lucky numbers drawn so far. */
+  luckyNumbers: number[];
 };
 
 export type HostMessage =
@@ -58,23 +89,40 @@ export type HostMessage =
   // The settings page saved the settings: the stage reloads them and tells Tina.
   | { kind: 'settings' };
 
-/** The panel's lists from the settings and the award list. */
-export function hostLists(settings: CeremonySettings, awards: Award[]): HostLists {
-  const categories: HostLists['awards'] = [];
+/** The panel's lists from the settings, the award list and its sections. */
+export function hostLists(
+  settings: CeremonySettings,
+  awards: Award[],
+  sections: AwardSection[]
+): HostLists {
+  const named = sections.length > 1;
+  const groups: HostSection[] = sections.map((s, i) => ({
+    name: named ? s.name.trim() || `Section ${i + 1}` : '',
+    awards: [],
+  }));
   for (const award of awards) {
     const category = award.category.trim();
-    const same = categories.find((c) => c.category.toLowerCase() === category.toLowerCase());
+    if (!category) {
+      continue;
+    }
+    const group = groups[sections.indexOf(sectionOf(award, sections))];
+    const same = group.awards.find((c) => c.category.toLowerCase() === category.toLowerCase());
     if (same) {
       same.winners += 1;
-    } else if (category) {
-      categories.push({ category, winners: 1 });
+    } else {
+      group.awards.push({ category, winners: 1 });
     }
   }
   return {
     events: settings.events
-      .filter((e) => (e.trigger ?? 'called') === 'called' && e.name.trim() && e.script.trim())
-      .map((e) => ({ name: e.name.trim(), kind: e.kind === 'ask_ai' ? 'ask_ai' : 'say' })),
-    awards: categories,
+      .filter((e) => e.name.trim() && e.script.trim())
+      .map((e) => ({
+        name: e.name.trim(),
+        kind: e.kind ?? 'say',
+        trigger: e.trigger ?? 'called',
+        ...(e.kind === 'lucky_draw' ? { draws: e.draws ?? 5 } : {}),
+      })),
+    sections: groups,
     songs: settings.songs.filter((s) => s.name.trim() && s.url.trim()).map((s) => s.name.trim()),
   };
 }
