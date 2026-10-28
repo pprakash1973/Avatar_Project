@@ -157,11 +157,12 @@ def make_tts(language: str, voice: str = "") -> tts.TTS:
         voice=AZURE_VOICES.get(voice, AZURE_VOICES["neerja"]),
         language=AZURE_LANGUAGES.get(language, "en-IN"),
     )
-    if voice in AZURE_VOICES:
-        return tts.FallbackAdapter([voice_azure, voice_cartesia])
-    # A Cartesia voice: Azure's Neerja takes over if Cartesia fails (e.g. out of
-    # credits, which once left Tina silent mid-ceremony).
-    return tts.FallbackAdapter([voice_cartesia, voice_azure])
+    if voice in VOICES:
+        # A Cartesia voice chosen on purpose: Azure's Neerja takes over if Cartesia
+        # fails (e.g. out of credits, which once left Tina silent mid-ceremony).
+        return tts.FallbackAdapter([voice_cartesia, voice_azure])
+    # An Azure voice, or none given: Azure first, Cartesia as the backup.
+    return tts.FallbackAdapter([voice_azure, voice_cartesia])
 
 
 def room_options(*, ceremony: bool) -> room_io.RoomOptions:

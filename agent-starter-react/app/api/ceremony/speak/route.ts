@@ -26,6 +26,17 @@ const AZURE_LANGUAGES: Record<string, string> = {
   ml: 'ml-IN',
 };
 
+/** As speakable() in the agent: no quote marks (an HD voice read a line opening with one
+ * in a man's voice), emoji or stray punctuation ("here! ."). */
+const speakable = (text: string) =>
+  text
+    .replace(/[\u201c\u201d\u201e\u00ab\u00bb"]/g, '')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\p{So}\u200d\ufe0e\ufe0f]/gu, '')
+    .replace(/([.!?\u2026])(\s+[.!?\u2026,;:]+)+(?=\s|$)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+
 const escapeXml = (text: string) => text.replace(/[<>&'"]/g, (c) => `&#${c.charCodeAt(0)};`);
 
 /** MP3 from Azure Speech, or null if it isn't configured or fails (Cartesia is used). */
@@ -57,12 +68,17 @@ async function azureSpeech(text: string, voice: string, lang: string) {
 }
 
 export async function POST(req: Request) {
-  const { text, voice, language } = (await req.json()) as {
+  const {
+    text: written,
+    voice,
+    language,
+  } = (await req.json()) as {
     text?: string;
     voice?: string;
     language?: string;
   };
   const lang = ['en', 'hi', 'ta', 'ml'].includes(language ?? '') ? language! : 'en';
+  const text = speakable(written ?? '');
   if (!text?.trim() || text.length > MAX_CHARS) {
     return new NextResponse(`Text must be 1-${MAX_CHARS} characters.`, { status: 400 });
   }

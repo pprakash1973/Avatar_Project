@@ -29,8 +29,6 @@ export function LuckyDraw({
   startedAt,
   digits,
   shown,
-  from,
-  to,
   round,
   rounds,
 }: {
@@ -40,8 +38,6 @@ export function LuckyDraw({
   digits: number;
   /** The digits fallen so far, left to right. */
   shown: string[];
-  from?: number;
-  to?: number;
   /** Which draw this is, of how many planned ("Draw 2 of 5"). */
   round?: number;
   rounds?: number;
@@ -147,11 +143,8 @@ export function LuckyDraw({
         ))}
       </div>
       <p className="h-[4vh] text-[3vh] text-amber-200/90">
-        {complete
-          ? 'Our lucky number!'
-          : spinning && from !== undefined && to !== undefined
-            ? `A number from ${from.toLocaleString()} to ${to.toLocaleString()}…`
-            : ''}
+        {/* Only the number itself: the audience never sees the range. */}
+        {complete ? 'Our lucky number!' : ''}
       </p>
     </div>
   );

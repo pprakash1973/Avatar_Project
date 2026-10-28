@@ -1067,8 +1067,6 @@ export function CeremonyStage({
           startedAt={draw.startedAt}
           digits={draw.digits}
           shown={draw.shown}
-          from={draw.from}
-          to={draw.to}
           round={draw.round}
           rounds={draw.rounds}
         />

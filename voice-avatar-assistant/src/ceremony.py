@@ -13,6 +13,7 @@ import random
 import re
 import textwrap
 import time
+import unicodedata
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -311,6 +312,38 @@ async def _synthesize(synthesizer: tts.TTS, text: str) -> AsyncIterable[rtc.Audi
             yield audio.frame
 
 
+# Quote marks are dropped and curly apostrophes made straight: an HD voice read a line
+# opening with "“" as someone else's words, in a man's voice.
+_QUOTES = str.maketrans(
+    {
+        chr(0x201C): "",  # left double quote
+        chr(0x201D): "",  # right double quote
+        chr(0x201E): "",  # low double quote
+        chr(0x00AB): "",  # left guillemet
+        chr(0x00BB): "",  # right guillemet
+        '"': "",
+        chr(0x2019): "'",  # right single quote (curly apostrophe)
+        chr(0x2018): "'",  # left single quote
+    }
+)
+# Joiners and variation selectors that come with emoji.
+_EMOJI_PARTS = {chr(0x200D), chr(0xFE0F), chr(0xFE0E)}
+
+
+def speakable(text: str) -> str:
+    """The text as the voice gets it: without quote marks, emoji (symbols) or stray
+    punctuation ("here! ."). What's shown and logged keeps the text as written."""
+    text = text.translate(_QUOTES)
+    text = "".join(
+        c
+        for c in text
+        if unicodedata.category(c) not in ("So", "Cs") and c not in _EMOJI_PARTS
+    )
+    # Punctuation standing alone after a sentence's end ("here! ." -> "here!").
+    text = re.sub(r"(?<=[.!?…])(\s+[.!?…,;:]+)+(?=\s|$)", "", text)
+    return " ".join(text.split())
+
+
 async def with_pauses(text: AsyncIterable[str], speak) -> AsyncIterable[rtc.AudioFrame]:
     """Says the text sentence by sentence (speak(sentence) gives its audio), with a
     short pause between sentences, so a long passage isn't rushed."""
@@ -325,12 +358,13 @@ async def with_pauses(text: AsyncIterable[str], speak) -> AsyncIterable[rtc.Audi
     last: rtc.AudioFrame | None = None
     try:
         async for sentence in sentences:
-            if not sentence.token.strip():
+            spoken = speakable(sentence.token)
+            if not any(c.isalnum() for c in spoken):
                 continue
             if last is not None:
                 for frame in _gap(SENTENCE_GAP_SECONDS, last):
                     yield frame
-            async for frame in speak(sentence.token):
+            async for frame in speak(spoken):
                 last = frame
                 yield frame
     finally:
