@@ -1157,12 +1157,30 @@ export function CeremonySetup({
                     Hologram (10 seconds): Tina materializes in a beam of light
                   </option>
                 </select>
+                {settings.intro_style !== 'hologram' && (
+                  <select
+                    aria-label="Entrance music"
+                    className={inputClassName}
+                    disabled={!settings.intro_reveal}
+                    value={settings.intro_music}
+                    onChange={(e) =>
+                      updateSettings({ intro_music: e.target.value as 'rock' | 'cinematic' })
+                    }
+                  >
+                    <option value="rock">
+                      Music: energetic rock (crashes on the flashes, a big hit as she appears)
+                    </option>
+                    <option value="cinematic">
+                      Music: cinematic (a drum roll and swelling chords, a chime as she appears)
+                    </option>
+                  </select>
+                )}
                 <button
                   type="button"
                   onClick={() =>
                     settings.intro_style === 'hologram'
                       ? playRevealSound(settings.walkup_volume)
-                      : playSpotlightSound(settings.walkup_volume)
+                      : playSpotlightSound(settings.walkup_volume, settings.intro_music)
                   }
                   className="text-muted-foreground hover:text-foreground flex items-center gap-1 self-start text-xs"
                 >

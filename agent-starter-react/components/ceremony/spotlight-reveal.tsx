@@ -5,9 +5,15 @@ import { getSavedSpeakerId } from '@/lib/visitor';
 
 type SinkableAudio = HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> };
 
-/** The spotlight entrance's sound: a drum roll and swelling chords, a pop for each big
- * camera flash, and a burst and chime as Tina is fully lit (at FINAL_FLASH). */
-export const SPOTLIGHT_SOUND = '/sounds/tina_spotlight.mp3';
+/** The spotlight entrance's music, each landing its big moment on FINAL_FLASH (18 s):
+ * rock (a riff building into the full band, a crash on each big flash, a snare build
+ * and a big hit) or cinematic (a drum roll and swelling chords, a pop for each flash
+ * and a burst and chime). */
+export const SPOTLIGHT_SOUNDS = {
+  rock: '/sounds/tina_rock.mp3',
+  cinematic: '/sounds/tina_spotlight.mp3',
+} as const;
+export type SpotlightMusic = keyof typeof SPOTLIGHT_SOUNDS;
 
 // Fractions of the entrance: the big camera flashes that light Tina up a little more
 // each time (the same moments as `spotlight-materialize` in globals.css and the sound),
@@ -24,9 +30,9 @@ const GLITTER = 240;
 const SMALL_FLASHES = 44;
 const CONFETTI = 70;
 
-/** Plays the spotlight entrance sound on the hall speaker. */
-export function playSpotlightSound(volume: number) {
-  const audio: SinkableAudio = new Audio(SPOTLIGHT_SOUND);
+/** Plays the spotlight entrance's music on the hall speaker. */
+export function playSpotlightSound(volume: number, music: SpotlightMusic = 'rock') {
+  const audio: SinkableAudio = new Audio(SPOTLIGHT_SOUNDS[music] ?? SPOTLIGHT_SOUNDS.rock);
   audio.volume = Math.min(1, Math.max(0, volume));
   const speakerId = getSavedSpeakerId();
   if (speakerId && audio.setSinkId) {
@@ -46,12 +52,20 @@ const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 
  * `spotlight-materialize` class on her video), until a final burst leaves her fully
  * lit, with confetti and her name.
  */
-export function SpotlightReveal({ seconds, volume }: { seconds: number; volume: number }) {
+export function SpotlightReveal({
+  seconds,
+  volume,
+  music,
+}: {
+  seconds: number;
+  volume: number;
+  music: SpotlightMusic;
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     // The sound's tail rings on after the entrance: not stopped on unmount.
-    playSpotlightSound(volume);
+    playSpotlightSound(volume, music);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

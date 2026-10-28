@@ -59,6 +59,8 @@ export type CeremonySettings = {
   /** Its look: spotlights sweeping and flashing until she's fully lit (20 s), or a
    * hologram materializing (10 s). */
   intro_style: 'spotlight' | 'hologram';
+  /** The spotlight entrance's music: energetic rock, or a cinematic swell. */
+  intro_music: 'rock' | 'cinematic';
   /** Play walk-up music after each winner (the built-in clap-along beat by default). */
   walkup: boolean;
   /** How long the music plays after the last winner of a category, in seconds. */
@@ -289,6 +291,7 @@ export const DEFAULT_SETTINGS: CeremonySettings = {
   suspense_music: true,
   intro_reveal: true,
   intro_style: 'spotlight',
+  intro_music: 'rock',
   walkup: true,
   walkup_seconds: 30,
   walkup_volume: 0.6,

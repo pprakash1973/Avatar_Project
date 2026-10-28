@@ -1117,7 +1117,11 @@ export function CeremonyStage({
         </div>
       )}
       {entrance.phase === 'playing' && spotlight && (
-        <SpotlightReveal seconds={entrance.ms / 1000} volume={settings.walkup_volume} />
+        <SpotlightReveal
+          seconds={entrance.ms / 1000}
+          volume={settings.walkup_volume}
+          music={settings.intro_music}
+        />
       )}
       {entrance.phase === 'playing' && !spotlight && (
         <HologramReveal seconds={entrance.ms / 1000} volume={settings.walkup_volume} />
