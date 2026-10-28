@@ -16,6 +16,7 @@ import {
   StopIcon,
 } from '@phosphor-icons/react/dist/ssr';
 import { APPLAUSE_MS, ApplauseCrowd } from '@/components/ceremony/applause-crowd';
+import type { LoadedEventSlides } from '@/components/ceremony/event-slides';
 import { HologramReveal, PreRevealOrb } from '@/components/ceremony/hologram-reveal';
 import { LuckyDraw } from '@/components/ceremony/lucky-draw';
 import { MusicCard } from '@/components/ceremony/music-card';
@@ -33,6 +34,7 @@ import {
   CEREMONY_AWARDS_TOPIC,
   CEREMONY_EVENTS_TOPIC,
   type CeremonySettings,
+  EVENT_SLIDE_SECONDS,
   SUSPENSE_TRACKS,
   type SectionDeck,
   loadOvationPhoto,
@@ -222,6 +224,36 @@ const REVEAL_FAILSAFE_AFTER_VIDEO_MS = 20_000;
 // An event's name stays over Tina this long (e.g. through the lamp lighting).
 const EVENT_TITLE_MS = 2 * 60 * 1000;
 
+/** An event's own slides: one stays up; several take turns every EVENT_SLIDE_SECONDS. */
+function EventSlideshow({ slides, startedAt }: { slides: LoadedEventSlides; startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (slides.count < 2) {
+      return;
+    }
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [slides.count]);
+  const index =
+    slides.count > 1
+      ? Math.floor(Math.max(0, now - startedAt) / (EVENT_SLIDE_SECONDS * 1000)) % slides.count
+      : 0;
+  return (
+    <div key={index} className="event-slide-fade absolute inset-0">
+      {slides.pdf ? (
+        <SlideCanvas deck={slides.pdf} slide={index + 1} redraw={0} />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={slides.images?.[index]}
+          alt={`Slide ${index + 1}`}
+          className="size-full object-contain"
+        />
+      )}
+    </div>
+  );
+}
+
 /** Red stage curtains over an award's slide; they part when `opening`. `label`: a new
  * award section's name, in gold on the valance. */
 function Curtains({ opening, label }: { opening: boolean; label: string | null }) {
@@ -291,13 +323,22 @@ const DRAW_HOLD_MS = 2 * 60 * 1000;
 interface CeremonyStageProps {
   /** The award sections' PDFs, in order; Tina numbers their slides one after another. */
   decks: SectionDeck<PDFDocumentProxy>[];
+  /** The events' own slides, by their slides' id. */
+  eventSlides: Record<string, LoadedEventSlides>;
   awards: Award[];
   settings: CeremonySettings;
   onReconnect: () => void;
   onEnd: () => void;
 }
 
-export function CeremonyStage({ decks, awards, settings, onReconnect, onEnd }: CeremonyStageProps) {
+export function CeremonyStage({
+  decks,
+  eventSlides,
+  awards,
+  settings,
+  onReconnect,
+  onEnd,
+}: CeremonyStageProps) {
   const { room, isConnected, connectionState } = useSessionContext();
   const agent = useAgent();
   const { videoTrack } = useVoiceAssistant();
@@ -308,7 +349,11 @@ export function CeremonyStage({ decks, awards, settings, onReconnect, onEnd }: C
   // 'video': Tina large in the middle, a YouTube video in a small corner window
   // (E enlarges it to fill the screen, Tina then in the corner).
   // 'draw': the lucky draw fills the screen, Tina in the corner.
-  const [view, setView] = useState<'tina' | 'slide' | 'video' | 'draw'>('tina');
+  // 'event': the event's own slides fill the screen until the next event or award.
+  const [view, setView] = useState<'tina' | 'slide' | 'video' | 'draw' | 'event'>('tina');
+  const [eventShow, setEventShow] = useState<{ id: string; at: number } | null>(null);
+  const eventSlidesRef = useRef(eventSlides);
+  eventSlidesRef.current = eventSlides;
   const viewRef = useRef(view);
   viewRef.current = view;
   // Search results for the video on screen; N plays the next one.
@@ -633,6 +678,16 @@ export function CeremonyStage({ decks, awards, settings, onReconnect, onEnd }: C
           musicRef.current.stop();
           setDraw(null);
           eventName.current = String(status.name || '');
+          // The event's own slides, if it has them, until the next event or award.
+          const own = programRef.current.settings.events.find(
+            (e) => e.name.trim() === eventName.current.trim()
+          )?.slides;
+          if (own && eventSlidesRef.current[own.id]) {
+            setEventShow({ id: own.id, at: Date.now() });
+            setView('event');
+          } else {
+            setEventShow(null);
+          }
           setEventTitle({
             name: eventName.current,
             at: Date.now(),
@@ -794,7 +849,10 @@ export function CeremonyStage({ decks, awards, settings, onReconnect, onEnd }: C
     live: tinaLive,
     connection: connectionState,
     agentState: agent.state,
-    now: view === 'tina' || view === 'draw' ? (eventTitle?.name ?? null) : hiddenTitle || null,
+    now:
+      view === 'tina' || view === 'draw' || view === 'event'
+        ? (eventTitle?.name ?? null)
+        : hiddenTitle || null,
     music: music.playing ? (music.song ?? 'Walk-up music') : null,
     onHold,
     muted,
@@ -923,7 +981,8 @@ export function CeremonyStage({ decks, awards, settings, onReconnect, onEnd }: C
   }, [slide, showSlide, view, endVideo, nextVideo, reveal]);
 
   // Tina fills the middle unless a slide (or an enlarged video) takes the screen.
-  const tinaInCorner = view === 'slide' || view === 'draw' || (view === 'video' && videoLarge);
+  const tinaInCorner =
+    view === 'slide' || view === 'draw' || view === 'event' || (view === 'video' && videoLarge);
   // Videos and music cards go in a corner Tina isn't using.
   const mediaCorner =
     tinaInCorner && CORNERS[corner].includes('right') ? 'left-3 bottom-16' : 'right-3 bottom-3';
@@ -994,6 +1053,13 @@ export function CeremonyStage({ decks, awards, settings, onReconnect, onEnd }: C
         />
       )}
 
+      {view === 'event' && eventShow && eventSlides[eventShow.id] && (
+        <EventSlideshow
+          key={eventShow.at}
+          slides={eventSlides[eventShow.id]}
+          startedAt={eventShow.at}
+        />
+      )}
       {view === 'draw' && draw && (
         <LuckyDraw
           key={draw.id}
@@ -1060,7 +1126,9 @@ export function CeremonyStage({ decks, awards, settings, onReconnect, onEnd }: C
             ? `Video (E: ${videoLarge ? 'smaller' : 'enlarge'} · V: stop)`
             : view === 'draw'
               ? 'Lucky draw (T: Tina)'
-              : 'Tina view (S: slide)'}
+              : view === 'event'
+                ? 'Event slides (T: Tina)'
+                : 'Tina view (S: slide)'}
         {onHold && ' · On hold (say “continue”)'}
         {music.playing && ` · ${music.song ? `♪ ${music.song}` : 'Music'} (M: stop)`}
       </div>

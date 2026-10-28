@@ -452,6 +452,16 @@
   animation: valance-lift 2.6s ease-in forwards;
 }
 
+/* An event's slides fade in, one after another. */
+@keyframes event-slide-in {
+  from {
+    opacity: 0;
+  }
+}
+.event-slide-fade {
+  animation: event-slide-in 0.8s ease-out;
+}
+
 /* The lucky draw: the jar rocks while its balls tumble, tips to pour, and each digit's
    ball pops out of it and falls into its place. */
 @keyframes lucky-rock {

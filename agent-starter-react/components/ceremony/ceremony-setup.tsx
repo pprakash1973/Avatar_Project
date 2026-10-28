@@ -12,6 +12,7 @@ import {
 } from '@phosphor-icons/react/dist/ssr';
 import { MicrophoneSelect } from '@/components/app/microphone-select';
 import { VoiceSelect } from '@/components/app/voice-select';
+import { EventSlidesField } from '@/components/ceremony/event-slides';
 import { FloatingRemote, useFloatingRemote } from '@/components/ceremony/floating-remote';
 import { playRevealSound } from '@/components/ceremony/hologram-reveal';
 import { HostPanel } from '@/components/ceremony/host-panel';
@@ -50,7 +51,6 @@ import {
   saveSettingsEverywhere,
   saveWalkupMusic,
   sectionOf,
-  slideOffsets,
   spokenText,
 } from '@/lib/ceremony';
 import { announceSettingsSaved } from '@/lib/host-channel';
@@ -482,8 +482,9 @@ export function CeremonySetup({
     (d) => !d.doc && awards.some((a) => sectionOf(a, sections).id === d.id)
   );
   const awardsOk = awards.every((a) => a.category && a.script);
-  const ready = awards.length > 0 && awardsOk && missingPdf.length === 0;
-  const totalSlides = slideOffsets(decks).total;
+  // Awards are optional: a programme of events only can start too.
+  const ready =
+    (awards.length > 0 || settings.events.length > 0) && awardsOk && missingPdf.length === 0;
 
   // The tab last open on this laptop (restored after the first render, which the server
   // also makes).
@@ -624,7 +625,7 @@ export function CeremonySetup({
                 const placeholder = placeholderIn(event.script);
                 return (
                   <li key={index} className="flex gap-3 rounded-lg border p-3">
-                    <div className="grid flex-1 gap-2 md:grid-cols-[1fr_15rem_6rem]">
+                    <div className="grid flex-1 gap-2 md:grid-cols-[1fr_15rem]">
                       <label className="text-muted-foreground text-xs">
                         Event name (what the host says)
                         <input
@@ -651,22 +652,7 @@ export function CeremonySetup({
                           ))}
                         </select>
                       </label>
-                      <label className="text-muted-foreground text-xs">
-                        Slide (optional)
-                        <input
-                          type="number"
-                          min={0}
-                          max={totalSlides || undefined}
-                          disabled={(event.trigger ?? 'called') !== 'called'}
-                          className={inputClassName}
-                          value={event.slide || ''}
-                          placeholder="Tina"
-                          onChange={(e) =>
-                            setEvent(index, { slide: Math.max(0, Number(e.target.value) || 0) })
-                          }
-                        />
-                      </label>
-                      <label className="text-muted-foreground text-xs md:col-span-3">
+                      <label className="text-muted-foreground text-xs md:col-span-2">
                         What Tina says in English (word-for-word; {'{name}'} is the host&rsquo;s
                         name)
                         <textarea
@@ -677,8 +663,28 @@ export function CeremonySetup({
                           onChange={(e) => setEvent(index, { script: e.target.value })}
                         />
                       </label>
+                      {(event.trigger ?? 'called') === 'called' && event.kind !== 'lucky_draw' && (
+                        <div className="md:col-span-2">
+                          <EventSlidesField
+                            slides={event.slides}
+                            onChange={(slides) => setEvent(index, { slides, slide: undefined })}
+                          />
+                          {!event.slides && Boolean(event.slide) && (
+                            <p className="text-muted-foreground mt-1 text-xs">
+                              Shows slide {event.slide} of the award PDFs.{' '}
+                              <button
+                                type="button"
+                                className="underline"
+                                onClick={() => setEvent(index, { slide: undefined })}
+                              >
+                                Don&rsquo;t
+                              </button>
+                            </p>
+                          )}
+                        </div>
+                      )}
                       {event.kind === 'ask_ai' && (
-                        <p className="rounded-md bg-sky-500/10 p-2 text-xs md:col-span-3">
+                        <p className="rounded-md bg-sky-500/10 p-2 text-xs md:col-span-2">
                           <strong>Audience Q&amp;A.</strong> After this text, anyone on stage can
                           ask Tina anything, without saying her name. She answers with a touch of
                           humour, doesn&rsquo;t use the host&rsquo;s name, and says &ldquo;Sorry, I
@@ -689,7 +695,7 @@ export function CeremonySetup({
                         </p>
                       )}
                       {event.kind === 'lucky_draw' && (
-                        <div className="flex flex-col gap-2 rounded-md bg-amber-500/10 p-2 text-xs md:col-span-3">
+                        <div className="flex flex-col gap-2 rounded-md bg-amber-500/10 p-2 text-xs md:col-span-2">
                           <p>
                             <strong>Lucky draw.</strong> After this text a lucky jar spins on the
                             screen for 30 seconds with suspense music, then the number falls out of
@@ -757,7 +763,7 @@ export function CeremonySetup({
                         </div>
                       )}
                       {placeholder && (
-                        <p role="alert" className="text-xs text-amber-600 md:col-span-3">
+                        <p role="alert" className="text-xs text-amber-600 md:col-span-2">
                           Fill in {placeholder} before the event: Tina would read it out as written.
                         </p>
                       )}
@@ -776,7 +782,7 @@ export function CeremonySetup({
                         )}
                         Hear how Tina will say it
                       </button>
-                      <div className="md:col-span-3">
+                      <div className="md:col-span-2">
                         <SpeechLanguages
                           id={`event-${index}`}
                           source={event.script}
@@ -792,7 +798,7 @@ export function CeremonySetup({
                       </div>
                       {(event.kind ?? 'say') === 'say' &&
                         (event.trigger ?? 'called') === 'called' && (
-                          <div className="text-muted-foreground flex flex-col gap-1 text-xs md:col-span-3">
+                          <div className="text-muted-foreground flex flex-col gap-1 text-xs md:col-span-2">
                             <span>
                               Music after Tina&rsquo;s text (optional), e.g. devotional music for
                               the lamp lighting: an .mp3 or YouTube link. It plays for
@@ -1683,8 +1689,11 @@ export function CeremonySetup({
                   }, ${awards.filter((a) => sectionOf(a, sections).id === d.id).length} awards`,
                 })),
                 {
-                  ok: awards.length > 0 && awardsOk,
-                  text: `${awards.length} announcements, each with a category and text`,
+                  ok: awardsOk,
+                  text:
+                    awards.length === 0
+                      ? 'No awards (optional): events only'
+                      : `${awards.length} announcements, each with a category and text`,
                 },
                 {
                   ok: !isDirty,
@@ -1718,8 +1727,8 @@ export function CeremonySetup({
               </Button>
               {!ready && (
                 <p className="text-muted-foreground text-xs">
-                  Upload each award section&rsquo;s PDF and make sure every award has a category and
-                  announcement text.
+                  Add an event or an award. Each award section with awards needs its PDF, and every
+                  award a category and announcement text.
                 </p>
               )}
             </div>

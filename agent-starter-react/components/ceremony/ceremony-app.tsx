@@ -9,6 +9,11 @@ import { StartAudioButton } from '@/components/agents-ui/start-audio-button';
 import { ConnectionDiagnosis } from '@/components/app/connection-diagnosis';
 import { CeremonySetup } from '@/components/ceremony/ceremony-setup';
 import { CeremonyStage } from '@/components/ceremony/ceremony-stage';
+import {
+  type LoadedEventSlides,
+  loadAllEventSlides,
+  releaseEventSlides,
+} from '@/components/ceremony/event-slides';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
 import { toastAlert, useAgentErrors } from '@/hooks/useAgentErrors';
@@ -188,6 +193,30 @@ export function CeremonyApp({
       channel.close();
     };
   }, [mode]);
+  // The stage window's copy of the events' own slides (kept on this laptop).
+  const [eventSlides, setEventSlides] = useState<Record<string, LoadedEventSlides>>({});
+  const slidesKey = JSON.stringify(settings.events.map((e) => e.slides?.id ?? ''));
+  useEffect(() => {
+    if (mode !== 'stage') {
+      return;
+    }
+    let stopped = false;
+    let loaded: Record<string, LoadedEventSlides> = {};
+    void loadAllEventSlides(settings.events).then((all) => {
+      loaded = all;
+      if (stopped) {
+        releaseEventSlides(all);
+      } else {
+        setEventSlides(all);
+      }
+    });
+    return () => {
+      stopped = true;
+      releaseEventSlides(loaded);
+    };
+    // Reloaded when the events' slides change (slidesKey), not on every settings edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, slidesKey]);
   // The stage needs at least one PDF (or no awards at all).
   const stageReady = docsLoaded && (awards.length === 0 || Object.keys(docs).length > 0);
 
@@ -242,6 +271,7 @@ export function CeremonyApp({
         onStage && stageReady ? (
           <CeremonyStage
             decks={decks}
+            eventSlides={eventSlides}
             awards={awards}
             settings={settings}
             onReconnect={start}
@@ -258,6 +288,7 @@ export function CeremonyApp({
       ) : onStage && stageReady ? (
         <CeremonyStage
           decks={decks}
+          eventSlides={eventSlides}
           awards={awards}
           settings={settings}
           onReconnect={start}

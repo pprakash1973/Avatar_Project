@@ -112,6 +112,9 @@ export type CeremonyEvent = {
   draw_to?: number;
   /** How many lucky draws are planned: the host can roll again that often (or more). */
   draws?: number;
+  /** The event's own slides (a PDF or pictures, kept on this laptop): shown from the
+   * event until the next event or award, changing every EVENT_SLIDE_SECONDS. */
+  slides?: EventSlides;
   /** Music played once Tina has said the text (an audio file or YouTube link), e.g.
    * devotional music for the lamp lighting, for music_seconds. */
   music?: string;
@@ -119,6 +122,11 @@ export type CeremonyEvent = {
 };
 
 export type EventKind = 'say' | 'ask_ai' | 'lucky_draw';
+
+/** An event's slides: `id` names the files on this laptop; a PDF's pages or pictures. */
+export type EventSlides = { id: string; kind: 'pdf' | 'images'; count: number };
+/** Several slides of an event take turns this often, until the next event or award. */
+export const EVENT_SLIDE_SECONDS = 15;
 
 export const DEFAULT_EVENT_MUSIC_SECONDS = 60;
 export const MAX_EVENT_MUSIC_SECONDS = 300;
@@ -593,6 +601,36 @@ export const loadOvationPhoto = () => loadFile(OVATION_KEY);
 /** The optional walk-up music played after each winner; null removes it. */
 export const saveWalkupMusic = (file: Blob | null) => saveFile(WALKUP_KEY, file);
 export const loadWalkupMusic = () => loadFile(WALKUP_KEY);
+
+const eventSlideKey = (id: string, n: number) => `event-slides:${id}:${n}`;
+
+/** Keeps an event's slides on this laptop: one PDF, or the pictures in order. */
+export async function saveEventSlides(id: string, files: Blob[]) {
+  for (const [n, file] of files.entries()) {
+    await saveFile(eventSlideKey(id, n), file);
+  }
+}
+
+export async function removeEventSlides(slides: EventSlides) {
+  const files = slides.kind === 'pdf' ? 1 : slides.count;
+  for (let n = 0; n < files; n++) {
+    await saveFile(eventSlideKey(slides.id, n), null);
+  }
+}
+
+/** An event's files (null if they aren't on this laptop, e.g. set up on another one). */
+export async function loadEventSlides(slides: EventSlides): Promise<Blob[] | null> {
+  const files = slides.kind === 'pdf' ? 1 : slides.count;
+  const found: Blob[] = [];
+  for (let n = 0; n < files; n++) {
+    const file = await loadFile(eventSlideKey(slides.id, n));
+    if (!file) {
+      return null;
+    }
+    found.push(file);
+  }
+  return found;
+}
 
 async function saveFile(key: string, file: Blob | null): Promise<void> {
   try {

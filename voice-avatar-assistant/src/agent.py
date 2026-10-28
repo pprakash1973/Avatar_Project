@@ -147,12 +147,17 @@ def make_tts(language: str, voice: str = "") -> tts.TTS:
         language=language,
         voice=VOICES.get(voice, TINA_VOICE_ID),
     )
-    if voice not in AZURE_VOICES or not os.environ.get("AZURE_SPEECH_KEY"):
+    if not os.environ.get("AZURE_SPEECH_KEY"):
         return voice_cartesia
     voice_azure = AzureTTS(
-        voice=AZURE_VOICES[voice], language=AZURE_LANGUAGES.get(language, "en-IN")
+        voice=AZURE_VOICES.get(voice, AZURE_VOICES["neerja"]),
+        language=AZURE_LANGUAGES.get(language, "en-IN"),
     )
-    return tts.FallbackAdapter([voice_azure, voice_cartesia])
+    if voice in AZURE_VOICES:
+        return tts.FallbackAdapter([voice_azure, voice_cartesia])
+    # A Cartesia voice: Azure's Neerja takes over if Cartesia fails (e.g. out of
+    # credits, which once left Tina silent mid-ceremony).
+    return tts.FallbackAdapter([voice_cartesia, voice_azure])
 
 
 def room_options(*, ceremony: bool) -> room_io.RoomOptions:
@@ -922,6 +927,12 @@ async def entrypoint(ctx: JobContext) -> None:
     # Why the call ends, kept in its record (LiveKit doesn't keep the agent's logs).
     call_log = CallLog(started_at)
     call_log.add("host joined", identity=participant.identity)
+    # Which voice speaks, and whether Azure is there as a voice at all.
+    call_log.add(
+        "voice",
+        voice=attributes.get("voice", "") or "default",
+        azure=bool(os.environ.get("AZURE_SPEECH_KEY")),
+    )
     call_log.watch(ctx.room, session)
 
     # A call that ends early (e.g. before the award list arrives) is still recorded;
