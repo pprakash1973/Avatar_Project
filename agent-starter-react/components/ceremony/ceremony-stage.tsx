@@ -382,8 +382,6 @@ export function CeremonyStage({
     shown: string[];
     from?: number;
     to?: number;
-    round?: number;
-    rounds?: number;
   } | null>(null);
   // What's done (from Tina), for the host's panel.
   const [progress, setProgress] = useState<{
@@ -638,8 +636,6 @@ export function CeremonyStage({
             shown: [],
             from: typeof status.from === 'number' ? status.from : undefined,
             to: typeof status.to === 'number' ? status.to : undefined,
-            round: Number(status.round) || undefined,
-            rounds: Number(status.rounds) || undefined,
           });
           setView('draw');
           musicRef.current.playCountdown(seconds);
@@ -1067,8 +1063,6 @@ export function CeremonyStage({
           startedAt={draw.startedAt}
           digits={draw.digits}
           shown={draw.shown}
-          round={draw.round}
-          rounds={draw.rounds}
         />
       )}
       {(view === 'tina' || view === 'draw') && eventTitle?.name && (

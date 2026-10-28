@@ -29,8 +29,6 @@ export function LuckyDraw({
   startedAt,
   digits,
   shown,
-  round,
-  rounds,
 }: {
   seconds: number;
   startedAt: number;
@@ -38,9 +36,6 @@ export function LuckyDraw({
   digits: number;
   /** The digits fallen so far, left to right. */
   shown: string[];
-  /** Which draw this is, of how many planned ("Draw 2 of 5"). */
-  round?: number;
-  rounds?: number;
 }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -57,11 +52,6 @@ export function LuckyDraw({
         aria-hidden
         className="pointer-events-none absolute top-[8vh] left-1/2 size-[80vh] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgb(251_191_36/0.18),transparent_65%)]"
       />
-      {round && rounds && rounds > 1 && (
-        <p className="absolute top-[11vh] right-[4vw] rounded-full border border-amber-300/50 px-4 py-1 text-[2.4vh] font-semibold text-amber-200">
-          Draw {round} of {Math.max(round, rounds)}
-        </p>
-      )}
       <div
         className={`relative h-[42vh] ${spinning ? 'lucky-jar-rock' : complete ? '' : 'lucky-jar-pour'}`}
       >

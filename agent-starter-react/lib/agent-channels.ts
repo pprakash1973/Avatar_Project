@@ -83,7 +83,8 @@ export const VOICES = [
 ] as const;
 
 export type VoiceCode = (typeof VOICES)[number]['code'];
-export const DEFAULT_VOICE: VoiceCode = 'neerja';
+// Diya HD: Neerja HD drifted into a man's voice on some Tamil sentences; Diya never did.
+export const DEFAULT_VOICE: VoiceCode = 'diya';
 /** The ceremony's voices: the two Azure HD voices (every language in one voice), then
  * Cartesia's Priya. */
 export const CEREMONY_VOICES: VoiceCode[] = ['diya', 'neerja', 'priya'];

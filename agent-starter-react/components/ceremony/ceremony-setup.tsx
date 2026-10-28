@@ -757,8 +757,8 @@ export function CeremonySetup({
                           <p className="text-muted-foreground">
                             The text above opens the first draw. For the next ones, the host clicks{' '}
                             <strong>Roll again</strong> on the remote or says &ldquo;Tina, roll
-                            again&rdquo;, and Tina says &ldquo;Let&rsquo;s roll again! Lucky draw
-                            number 2 of {event.draws ?? 5}&rdquo;.
+                            again&rdquo;, and Tina says &ldquo;Let&rsquo;s roll again, to find the
+                            next lucky winner!&rdquo;
                           </p>
                           {(event.draw_from ?? 1000) > (event.draw_to ?? 5000) && (
                             <p role="alert" className="text-amber-600">

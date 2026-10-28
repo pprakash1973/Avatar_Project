@@ -154,11 +154,13 @@ def make_tts(language: str, voice: str = "") -> tts.TTS:
     if not os.environ.get("AZURE_SPEECH_KEY"):
         return voice_cartesia
     voice_azure = AzureTTS(
-        voice=AZURE_VOICES.get(voice, AZURE_VOICES["neerja"]),
+        # Diya HD by default: Neerja HD drifted into a man's voice on some Tamil
+        # sentences in testing; Diya never did.
+        voice=AZURE_VOICES.get(voice, AZURE_VOICES["diya"]),
         language=AZURE_LANGUAGES.get(language, "en-IN"),
     )
     if voice in VOICES:
-        # A Cartesia voice chosen on purpose: Azure's Neerja takes over if Cartesia
+        # A Cartesia voice chosen on purpose: Azure's Diya takes over if Cartesia
         # fails (e.g. out of credits, which once left Tina silent mid-ceremony).
         return tts.FallbackAdapter([voice_cartesia, voice_azure])
     # An Azure voice, or none given: Azure first, Cartesia as the backup.

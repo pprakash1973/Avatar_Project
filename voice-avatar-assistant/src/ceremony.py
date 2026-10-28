@@ -381,6 +381,25 @@ def script_language(text: str) -> str:
     return "en"
 
 
+_lucky = random.SystemRandom()
+
+
+def pick_lucky(low: int, high: int, drawn: list[int], draws: int) -> int:
+    """A random number from low to high, well apart from those already drawn (two
+    close numbers in a wide range looked rigged): at least a share of the range away,
+    less if the range fills up."""
+    gap = (high - low + 1) // (2 * max(draws, len(drawn) + 1))
+    while True:
+        for _ in range(200):
+            number = _lucky.randint(low, high)
+            if all(abs(number - d) >= max(gap, 1) for d in drawn):
+                return number
+        if gap <= 1:
+            # Every number has come up: repeats are unavoidable.
+            return _lucky.randint(low, high)
+        gap //= 2
+
+
 def _draw_number(raw, default: int) -> int:
     try:
         return max(0, int(raw))
@@ -426,6 +445,7 @@ DEFAULT_DRAWS = 5
 MAX_DRAWS = 50
 LUCKY_LEAD = "And the lucky number is"
 LUCKY_CHEER = "Congratulations to our lucky winner!"
+ROLL_AGAIN_LINE = "Let's roll again, to find the next lucky winner!"
 DIGIT_WORDS = [
     "zero",
     "one",
@@ -1798,10 +1818,7 @@ class CeremonyHost(Agent):
         await self._refresh()
 
     def _roll_again_line(self, event: CeremonyEvent) -> str:
-        draw = len(self._lucky_numbers) + 1
-        if draw <= event.draws:
-            return f"Let's roll again! Lucky draw number {draw} of {event.draws}."
-        return "Let's roll again! One more lucky draw."
+        return ROLL_AGAIN_LINE
 
     async def _draw_after(
         self, handle: SpeechHandle | None, event: CeremonyEvent, count: int
@@ -1818,11 +1835,7 @@ class CeremonyHost(Agent):
         if not going():
             return
         low, high = sorted((event.draw_from, event.draw_to))
-        number = random.randint(low, high)
-        for _ in range(100):
-            if number not in self._lucky_numbers:
-                break
-            number = random.randint(low, high)
+        number = pick_lucky(low, high, self._lucky_numbers, event.draws)
         digits = str(number)
         logger.info("lucky draw: %s", digits)
         await self._send_status(
